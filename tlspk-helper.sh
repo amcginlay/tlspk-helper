@@ -4,10 +4,12 @@
 # 1) TLSPK_CLUSTER_NAME must be less than 32 chars
 # 2) make deploy-operator-components depend upon install-operator
 # 3) provide an example curl command in the help output
+# 4) provide a NON_INTERACTIVE=true capability so we don't stomp on existing clusters
+# 5) add discover certs cabability (TLS secrets)
 
 : ${DEBUG:="false"}
 : ${COMMAND:="help"}
-: ${TLSPK_CLUSTER_NAME:=$(hostname)-$(date +"%y%m%d%H%M")}
+: ${TLSPK_CLUSTER_NAME:=k8s-$(date +"%y%m%d%H%M")-$(hostname)}
 
 BASE64_WRAP_SWITCH=$(uname | grep -q Darwin && echo b || echo w)
 
@@ -118,8 +120,11 @@ EOF
 cat ${dockerconfigjson_file} && rm ${dockerconfigjson_file} && rm ${pullsecret_file}
 }
 
+discover-certs() {
+  logger "TODO"
+}
+
 deploy-tlspk-agent() {
-  tlspk_agent_yaml_file=$(stash-tlspk-agent-yaml)
   logger "deploying TLSPK agent"
 
   local json_creds='{"user_id": "'"${TLSPK_SA_USER_ID}"'","user_secret": "'"$(echo ${TLSPK_SA_USER_SECRET} | sed 's/"/\\"/g')"'"}'
@@ -200,10 +205,11 @@ EOF
 create-demo-certs() {
   logger "create demo certs"
 
+  kubectl create namespace demo-certs
   vars=("hydrogen" "helium" "lithium" "beryllium" "boron" "carbon" "nitrogen" "oxygen" "fluorine" "neon")
   for var in "${vars[@]}"; do
     if [[ -z "${!var}" ]]; then
-    cat << EOF | kubectl apply -f -
+    cat << EOF | kubectl -n demo-certs apply -f -
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -225,6 +231,7 @@ help () {
   echo "Accepted exported or inlined environment variables are:"
   echo -e "\tCOMMAND              ->> one of the following: get-oauth-token"
   echo -e "\t                                               get-dockerconfig"
+  echo -e "\t                                               discover-certs"
   echo -e "\t                                               deploy-tlspk-agent"
   echo -e "\t                                               install-operator"
   echo -e "\t                                               deploy-operator-components"
@@ -258,6 +265,11 @@ case ${COMMAND} in
   'get-dockerconfig')
     check-dependency jq
     get-dockerconfig
+    exit 0
+    ;;
+  'discover-certs')
+    check-dependency kubectl
+    discover-certs
     exit 0
     ;;
   'deploy-tlspk-agent')
