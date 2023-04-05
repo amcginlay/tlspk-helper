@@ -266,18 +266,22 @@ case ${COMMAND} in
     exit 0
     ;;
   'install-operator')
+    check-dependency kubectl
     install-operator
     exit 0
     ;;
   'deploy-operator-components')
+    check-dependency kubectl
     deploy-operator-components
     exit 0
     ;;
   'deploy-self-signed-issuer')
+    check-dependency kubectl
     deploy-self-signed-issuer
     exit 0
     ;;
   'create-demo-certs')
+    check-dependency kubectl
     create-demo-certs
     exit 0
     ;;
