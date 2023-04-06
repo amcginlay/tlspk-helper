@@ -347,9 +347,11 @@ done
 set +u
 
 if [ -z ${TLSPK_CLUSTER_NAME+x} ]; then
-  # a default cluster name can be dated twice, once when it's created (e.g. kind-k8s-2304051918) 
-  # and once more when it's added to TLSPK (e.g. kind-k8s-2304051918-2304061514)
-  TLSPK_CLUSTER_NAME=$(cut -c-32 <<< $(kubectl config current-context 2> /dev/null || echo k8s)-$(date +"%y%m%d%H%M"))
+  if kubectl config current-context >/dev/null &2>1; then
+    TLSPK_CLUSTER_NAME=$(kubectl config current-context | cut -c-23)-$(date +"%y%m%d%H%M")
+  else  
+    TLSPK_CLUSTER_NAME=k8s-$(date +"%y%m%d%H%M")
+  fi
 fi
 
 ${COMMAND}
