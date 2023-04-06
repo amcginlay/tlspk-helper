@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 
 # TODO
-# 1) TLSPK_CLUSTER_NAME must be less than 32 chars
-# 2) make deploy-operator-components depend upon install-operator
-# 3) provide an example curl command in the help output
-# 4) provide a NON_INTERACTIVE=true capability so we don't stomp on existing clusters
-# 5) add discover certs cabability (TLS secrets)
+# - TLSPK_CLUSTER_NAME must be less than 32 chars
+# - migrate TLSPK_CLUSTER_NAME to be an argument
+# - make deploy-operator-components depend upon install-operator
+# - provide a NON_INTERACTIVE=true capability so we don't stomp on existing clusters
+# - add discover certs cabability (TLS secrets)
+# - Make sure s3 resources are accompanied by readme’s so observers know what depends upon them
 
-: ${DEBUG:="false"}
-: ${COMMAND:="help"}
-: ${TLSPK_CLUSTER_NAME:=k8s-$(date +"%y%m%d%H%M")-$(hostname)}
-
+SCRIPT_NAME="tlspk-helper.sh"
 BASE64_WRAP_SWITCH=$(uname | grep -q Darwin && echo b || echo w)
 
-function logger(){
-  echo "tlspk-helper.sh: $1"
+: ${DEBUG:="false"}
+: ${TLSPK_CLUSTER_NAME:=$(kubectl config current-context 2> /dev/null || echo k8s)-$(date +"%y%m%d%H%M")}
+# ^^^ this means a cluster can be dated twice, once when it's created (e.g. kind-k8s-2304051918) and once more when it's added to TLSPK (e.g. kind-k8s-2304051918-2304061514)
+
+function logger() {
+  true # echo "${SCRIPT_NAME}: $1"
 }
 
 finally() {
@@ -88,7 +90,7 @@ get-secret() {
   local secret_filename=$(get-secret-filename)
   if ! [ -f ${secret_filename} ]; then
     if ! result=$(create-secret); then echo ${result}; return 126; fi
-    mkdir $(get-config-dir)
+    mkdir -p $(get-config-dir)
     echo ${result} > ${secret_filename}
   fi
   cat ${secret_filename}
@@ -101,6 +103,7 @@ extract-secret-data() {
 
 get-dockerconfig()
 {
+  check-dependency jq # via extract-secret-data
   local pullsecret_file=$(mktemp)
   extract-secret-data > ${pullsecret_file}
 
@@ -120,11 +123,31 @@ EOF
 cat ${dockerconfigjson_file} && rm ${dockerconfigjson_file} && rm ${pullsecret_file}
 }
 
+show-cluster-status() {
+  echo "Current context is $(kubectl config current-context)"
+  kubectl cluster-info | head -2
+}
+
+approve-destructive-operation() {
+  show-cluster-status
+  if [ -z ${APPROVED+x} ]; then
+    read -p "Are you sure you want to approved this action? [y/N]" APPROVED
+  fi
+  if grep -qv "^y\|Y" <<< ${APPROVED}; then
+    echo "Potentially destructive operation not approved. Override with '--auto-approve'"
+    return 1
+  fi
+}
+
 discover-certs() {
+  check-dependency kubectl
   logger "TODO"
 }
 
-deploy-tlspk-agent() {
+deploy-agent() {
+  check-dependency kubectl
+  approve-destructive-operation
+
   logger "deploying TLSPK agent"
 
   local json_creds='{"user_id": "'"${TLSPK_SA_USER_ID}"'","user_secret": "'"$(echo ${TLSPK_SA_USER_SECRET} | sed 's/"/\\"/g')"'"}'
@@ -140,7 +163,8 @@ deploy-tlspk-agent() {
 }
 
 install-operator() {
-  logger "creating/fetching eu.gcr.io private image pull secret"
+  check-dependency kubectl
+  approve-destructive-operation
 
   logger "replicating secret into cluster"
   kubectl -n jetstack-secure delete secret jse-gcr-creds >/dev/null 2>&1 || true
@@ -161,6 +185,9 @@ install-operator() {
 }
 
 deploy-operator-components() {
+  check-dependency kubectl
+  approve-destructive-operation
+
   logger "deploy operator components"
 
   kubectl create -f - <<EOF
@@ -185,8 +212,11 @@ EOF
   kubectl -n jetstack-secure wait pod -l app=webhook --for=condition=Ready --timeout=-1s
 }
 
-deploy-self-signed-issuer() {
-  logger "deploying a self-signed issuer"
+create-self-signed-issuer() {
+  check-dependency kubectl
+  approve-destructive-operation
+
+  logger "creating a self-signed issuer"
   patchfile=$(mktemp)
   cat <<EOF > ${patchfile}
   spec:
@@ -203,6 +233,9 @@ EOF
 }
 
 create-demo-certs() {
+  check-dependency kubectl
+  approve-destructive-operation
+
   logger "create demo certs"
 
   kubectl create namespace demo-certs
@@ -227,22 +260,31 @@ EOF
   done
 }
 
-help () {
-  echo "Accepted exported or inlined environment variables are:"
-  echo -e "\tCOMMAND              ->> one of the following: get-oauth-token"
-  echo -e "\t                                               get-dockerconfig"
-  echo -e "\t                                               discover-certs"
-  echo -e "\t                                               deploy-tlspk-agent"
-  echo -e "\t                                               install-operator"
-  echo -e "\t                                               deploy-operator-components"
-  echo -e "\t                                               deploy-self-signed-issuer"
-  echo -e "\t                                               create-demo-certs"
-  echo -e "\tTLSPK_SA_USER_ID     ->> The User ID of a TLSPK service account"
-  echo -e "\tTLSPK_SA_USER_SECRET ->> The User Secret of a TLSPK service account"
-  echo -e "\t[TLSPK_CLUSTER_NAME] ->> The name of the cluster you wish to create/report"
+usage() {
+  echo "Helper script for TLS Protect for Kubernetes"
+  echo
+  echo "Usage:"
+  echo "  ./${SCRIPT_NAME} [command]"
+  echo
+  echo "Available Commands:"
+  echo "  get-oauth-token            Obtains token for TLSPK_SA_USER_ID/TLSPK_SA_USER_SECRET pair"
+  echo "  get-dockerconfig           Obtains Docker-compatible registry config / image pull secret (as used with 'help upgrade --registry-config')"
+  echo "  discover-certs             TODO"
+  echo "  deploy-agent               Deploys the TLSPK agent component"
+  echo "  install-operator           Installs the TLSPK operator"
+  echo "  deploy-operator-components Deploys minimal operator components, incluing cert-manager"
+  echo "  create-self-signed-issuer  Use cert-manager ClusterIssuer CRD to define a cluster-wide self-signed issuer"
+  echo "  create-demo-certs          Use cert-manager Certificate CRD to define a collection of self-signed certificates in the demo-certs namespace"
+  echo
+  echo "Flags:"
+  echo "  --auto-approve             Suppress interactive warnings regarding potentially destructive operations"
+  echo
+  echo "Environment Variables:"
+  echo "  TLSPK_SA_USER_ID           User ID of a TLSPK service account (required)"
+  echo "  TLSPK_SA_USER_SECRET       User Secret of a TLSPK service account (required - use single-quotes to preserve control chars!)"
+  echo "  TLSPK_CLUSTER_NAME         Name of the cluster you wish to create"
 }
 
-# main
 trap "finally" EXIT
 set -e
 
@@ -253,53 +295,27 @@ fi
 check-vars "TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET"
 check-dependency curl
 derive-org-from-user
-case ${COMMAND} in
-  'help')
-    help
-    exit 0
-    ;;
-  'get-oauth-token')
-    get-oauth-token
-    exit 0
-    ;;
-  'get-dockerconfig')
-    check-dependency jq
-    get-dockerconfig
-    exit 0
-    ;;
-  'discover-certs')
-    check-dependency kubectl
-    discover-certs
-    exit 0
-    ;;
-  'deploy-tlspk-agent')
-    check-dependency kubectl
-    deploy-tlspk-agent
-    exit 0
-    ;;
-  'install-operator')
-    check-dependency kubectl
-    install-operator
-    exit 0
-    ;;
-  'deploy-operator-components')
-    check-dependency kubectl
-    deploy-operator-components
-    exit 0
-    ;;
-  'deploy-self-signed-issuer')
-    check-dependency kubectl
-    deploy-self-signed-issuer
-    exit 0
-    ;;
-  'create-demo-certs')
-    check-dependency kubectl
-    create-demo-certs
-    exit 0
-    ;;
-  *)
-    echo "unknown COMMAND ${COMMAND}"
-    help
+
+if [[ $# -eq 0 ]]; then set ""; fi # fake arg if none
+export INPUT_ARGUMENTS="${@}"
+set -u
+unset COMMAND APPROVED
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    'get-oauth-token'|'get-dockerconfig'|'discover-certs'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-demo-certs')
+       export COMMAND=$1
+       ;;
+    '--auto-approve')
+       export APPROVED="y"
+       ;;
+    *) 
+      echo "Unrecognised command ${INPUT_ARGUMENTS}"
+    usage
     exit 1
-    ;;
-esac
+       ;;
+  esac
+  shift
+done
+set +u
+
+${COMMAND}
