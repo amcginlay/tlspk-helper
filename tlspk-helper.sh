@@ -3,9 +3,8 @@
 # TODO
 # - TLSPK_CLUSTER_NAME must be less than 32 chars
 # - migrate TLSPK_CLUSTER_NAME to be an argument
-# - make deploy-operator-components depend upon install-operator
-# - provide a NON_INTERACTIVE=true capability so we don't stomp on existing clusters
-# - add discover certs cabability (TLS secrets)
+# - make deploy-operator-components depend upon install-operator (and so on)
+# - add discover certs capability (TLS secrets)
 # - Make sure s3 resources are accompanied by readme’s so observers know what depends upon them
 
 SCRIPT_NAME="tlspk-helper.sh"
@@ -296,23 +295,23 @@ check-vars "TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET"
 check-dependency curl
 derive-org-from-user
 
-if [[ $# -eq 0 ]]; then set ""; fi # fake arg if none
+if [[ $# -eq 0 ]]; then set "usage"; fi # fake arg if none
 export INPUT_ARGUMENTS="${@}"
 set -u
 unset COMMAND APPROVED
 while [[ $# -gt 0 ]]; do
   case $1 in
-    'get-oauth-token'|'get-dockerconfig'|'discover-certs'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-demo-certs')
-       export COMMAND=$1
-       ;;
+    'usage'|'get-oauth-token'|'get-dockerconfig'|'discover-certs'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-demo-certs')
+      export COMMAND=$1
+      ;;
     '--auto-approve')
-       export APPROVED="y"
-       ;;
+      export APPROVED="y"
+      ;;
     *) 
       echo "Unrecognised command ${INPUT_ARGUMENTS}"
-    usage
-    exit 1
-       ;;
+      usage
+      exit 1
+      ;;
   esac
   shift
 done
