@@ -1,1 +1,6 @@
-TODO
+NOTE
+----
+Please do not move, rename or delete "tlspk-helper.sh" from it's S3 bucket
+without the prior agreement of the Venafi Ecosystem team.
+
+Before removal, the team should monitor the S3 logs to ensure downloads are at or very near zero.

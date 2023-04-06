@@ -1,18 +1,14 @@
 #!/usr/bin/env bash
 
 # TODO
-# - TLSPK_CLUSTER_NAME must be less than 32 chars
-# - migrate TLSPK_CLUSTER_NAME to be an argument
-# - make deploy-operator-components depend upon install-operator (and so on)
 # - add discover certs capability (TLS secrets)
-# - Make sure s3 resources are accompanied by readme’s so observers know what depends upon them
+# - '--auto-approve' on its own should fail
+# - allow operator version (default v0.0.1-alpha.24)
 
 SCRIPT_NAME="tlspk-helper.sh"
 BASE64_WRAP_SWITCH=$(uname | grep -q Darwin && echo b || echo w)
 
 : ${DEBUG:="false"}
-: ${TLSPK_CLUSTER_NAME:=$(kubectl config current-context 2> /dev/null || echo k8s)-$(date +"%y%m%d%H%M")}
-# ^^^ this means a cluster can be dated twice, once when it's created (e.g. kind-k8s-2304051918) and once more when it's added to TLSPK (e.g. kind-k8s-2304051918-2304061514)
 
 function logger() {
   true # echo "${SCRIPT_NAME}: $1"
@@ -57,7 +53,7 @@ get-oauth-token() {
 }
 
 derive-org-from-user() {
-  export TLSPK_ORG=$(cut -d'@' -f2- <<< ${TLSPK_SA_USER_ID} | cut -d'.' -f1)
+  TLSPK_ORG=$(cut -d'@' -f2- <<< ${TLSPK_SA_USER_ID} | cut -d'.' -f1)
 }
 
 get-secret-name() {
@@ -143,32 +139,58 @@ discover-certs() {
   logger "TODO"
 }
 
+check-undeployed() {
+  check-dependency kubectl
+  if kubectl get namespace ${1} >/dev/null 2>&1; then
+    if kubectl -n ${1} rollout status deployment ${2} >/dev/null 2>&1; then
+      echo "${1}/${2} is already deployed"
+      return 1
+    fi
+  fi
+  # if we got here, ${1}/${2} can be deployed
+}
+
+check-deployed() {
+  check-dependency kubectl
+  if kubectl get namespace ${1} >/dev/null 2>&1; then
+    if kubectl -n ${1} rollout status deployment ${2} >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  echo "${1}/${2} is not deployed"
+  return 1
+}
+
 deploy-agent() {
   check-dependency kubectl
+  check-undeployed jetstack-secure agent
   approve-destructive-operation
 
   logger "deploying TLSPK agent"
 
   local json_creds='{"user_id": "'"${TLSPK_SA_USER_ID}"'","user_secret": "'"$(echo ${TLSPK_SA_USER_SECRET} | sed 's/"/\\"/g')"'"}'
   local json_creds_b64=$(echo ${json_creds} | base64 -${BASE64_WRAP_SWITCH} 0)
+  local tlkps_cluster_name_adj=$(tr "-" "_" <<< ${TLSPK_CLUSTER_NAME})
   curl -sL https://raw.githubusercontent.com/jetstack/jsctl/main/internal/cluster/templates/agent.yaml | \
     sed "s/{{ .Organization }}/${TLSPK_ORG}/g" | \
-    sed "s/{{ .Name }}/$(tr "-" "_" <<< ${TLSPK_CLUSTER_NAME})/g" | \
+    sed "s/{{ .Name }}/${tlkps_cluster_name_adj}/g" | \
     sed "s/{{ .CredentialsJSON }}/$(echo ${json_creds_b64} | sed 's/\//\\\//g')/g" | \
     kubectl apply -f -
   
   logger "deploying TLSPK agent: awaiting steady state"
   sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=-1s
+  echo "Cluster will appear in TLSPK as ${tlkps_cluster_name_adj}"
 }
 
 install-operator() {
   check-dependency kubectl
+  check-undeployed jetstack-secure js-operator-operator
   approve-destructive-operation
 
   logger "replicating secret into cluster"
+  kubectl create namespace jetstack-secure >/dev/null 2>&1 || true
   kubectl -n jetstack-secure delete secret jse-gcr-creds >/dev/null 2>&1 || true
-  kubectl -n jetstack-secure create secret docker-registry jse-gcr-creds \
-    --from-file .dockerconfigjson=<(get-dockerconfig)
+  kubectl -n jetstack-secure create secret docker-registry jse-gcr-creds --from-file .dockerconfigjson=<(get-dockerconfig)
 
   logger "installing the operator"
   helm -n jetstack-secure upgrade -i js-operator \
@@ -185,9 +207,10 @@ install-operator() {
 
 deploy-operator-components() {
   check-dependency kubectl
+  check-undeployed jetstack-secure cert-manager
   approve-destructive-operation
 
-  logger "deploy operator components"
+  logger "deploy operator components (inc. cert-manager)"
 
   kubectl create -f - <<EOF
   apiVersion: operator.jetstack.io/v1alpha1
@@ -213,6 +236,7 @@ EOF
 
 create-self-signed-issuer() {
   check-dependency kubectl
+  check-deployed jetstack-secure cert-manager
   approve-destructive-operation
 
   logger "creating a self-signed issuer"
@@ -233,12 +257,13 @@ EOF
 
 create-demo-certs() {
   check-dependency kubectl
+  check-deployed jetstack-secure cert-manager
   approve-destructive-operation
 
   logger "create demo certs"
 
   kubectl create namespace demo-certs
-  vars=("hydrogen" "helium" "lithium" "beryllium" "boron" "carbon" "nitrogen" "oxygen" "fluorine" "neon")
+  local vars=("hydrogen" "helium" "lithium" "beryllium" "boron" "carbon" "nitrogen" "oxygen" "fluorine" "neon")
   for var in "${vars[@]}"; do
     if [[ -z "${!var}" ]]; then
     cat << EOF | kubectl -n demo-certs apply -f -
@@ -267,7 +292,7 @@ usage() {
   echo
   echo "Available Commands:"
   echo "  get-oauth-token            Obtains token for TLSPK_SA_USER_ID/TLSPK_SA_USER_SECRET pair"
-  echo "  get-dockerconfig           Obtains Docker-compatible registry config / image pull secret (as used with 'help upgrade --registry-config')"
+  echo "  get-dockerconfig           Obtains Docker-compatible registry config / image pull secret (as used with 'helm upgrade --registry-config')"
   echo "  discover-certs             TODO"
   echo "  deploy-agent               Deploys the TLSPK agent component"
   echo "  install-operator           Installs the TLSPK operator"
@@ -276,14 +301,14 @@ usage() {
   echo "  create-demo-certs          Use cert-manager Certificate CRD to define a collection of self-signed certificates in the demo-certs namespace"
   echo
   echo "Flags:"
-  echo "  --auto-approve             Suppress interactive warnings regarding potentially destructive operations"
+  echo "  --auto-approve             Suppress prompts regarding potentially destructive operations"
   echo
   echo "Environment Variables:"
   echo "  TLSPK_SA_USER_ID           User ID of a TLSPK service account (required)"
   echo "  TLSPK_SA_USER_SECRET       User Secret of a TLSPK service account (required - use single-quotes to preserve control chars!)"
-  echo "  TLSPK_CLUSTER_NAME         Name of the cluster you wish to create"
 }
 
+# ----- MAIN -----
 trap "finally" EXIT
 set -e
 
@@ -296,16 +321,20 @@ check-dependency curl
 derive-org-from-user
 
 if [[ $# -eq 0 ]]; then set "usage"; fi # fake arg if none
-export INPUT_ARGUMENTS="${@}"
+INPUT_ARGUMENTS="${@}"
 set -u
 unset COMMAND APPROVED
 while [[ $# -gt 0 ]]; do
   case $1 in
     'usage'|'get-oauth-token'|'get-dockerconfig'|'discover-certs'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-demo-certs')
-      export COMMAND=$1
+      COMMAND=$1
       ;;
     '--auto-approve')
-      export APPROVED="y"
+      APPROVED="y"
+      ;;
+    '--cluster-name')
+      shift
+      TLSPK_CLUSTER_NAME="${1}"
       ;;
     *) 
       echo "Unrecognised command ${INPUT_ARGUMENTS}"
@@ -316,5 +345,11 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 set +u
+
+if [ -z ${TLSPK_CLUSTER_NAME+x} ]; then
+  # a default cluster name can be dated twice, once when it's created (e.g. kind-k8s-2304051918) 
+  # and once more when it's added to TLSPK (e.g. kind-k8s-2304051918-2304061514)
+  TLSPK_CLUSTER_NAME=$(cut -c-32 <<< $(kubectl config current-context 2> /dev/null || echo k8s)-$(date +"%y%m%d%H%M"))
+fi
 
 ${COMMAND}
