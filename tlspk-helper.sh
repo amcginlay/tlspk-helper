@@ -141,7 +141,7 @@ approve-destructive-operation() {
 discover-tls-secrets() {
   check-dependencies jq kubectl
   show-cluster-status
-  kubectl get --raw /api/v1/secrets | jq -r '.items[] | select(.type == "kubernetes.io/tls") | "\(.metadata.namespace)/\(.metadata.name)"'
+  kubectl get --raw /api/v1/secrets | jq -r '.items[] | select(.type == "kubernetes.io/tls") | "/namespaces/\(.metadata.namespace)/secrets/\(.metadata.name)"'
 }
 
 check-undeployed() {
