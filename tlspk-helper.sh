@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 
 # TODO
-# - add discover certs capability (TLS secrets)
 # - '--auto-approve' on its own should fail
-# - maybe we should version-enable this script (--version)
+# - make certificate generation a little more interesting
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
@@ -35,11 +34,14 @@ check-vars() {
   return ${result}
 }
 
-check-dependency() {
-  command -v ${1} >/dev/null 2>&1 || {
-    echo "missing dependency: ${1}"
-    return 1
-  }
+check-dependencies() {
+  while [[ $# -gt 0 ]]; do
+    command -v ${1} >/dev/null 2>&1 || {
+      echo "missing dependency: ${1}"
+      return 1
+    }
+    shift
+  done
 }
 
 get-oauth-token() {
@@ -100,7 +102,7 @@ extract-secret-data() {
 
 get-dockerconfig()
 {
-  check-dependency jq # via extract-secret-data
+  check-dependencies jq # via extract-secret-data
   local pullsecret_file=$(mktemp)
   extract-secret-data > ${pullsecret_file}
 
@@ -136,13 +138,14 @@ approve-destructive-operation() {
   fi
 }
 
-discover-certs() {
-  check-dependency kubectl
-  logger "TODO"
+discover-tls-secrets() {
+  check-dependencies jq kubectl
+  show-cluster-status
+  kubectl get --raw /api/v1/secrets | jq -r '.items[] | select(.type == "kubernetes.io/tls") | "\(.metadata.namespace)/\(.metadata.name)"'
 }
 
 check-undeployed() {
-  check-dependency kubectl
+  check-dependencies kubectl
   if kubectl get namespace ${1} >/dev/null 2>&1; then
     if kubectl -n ${1} rollout status deployment ${2} >/dev/null 2>&1; then
       echo "${1}/${2} is already deployed"
@@ -153,7 +156,7 @@ check-undeployed() {
 }
 
 check-deployed() {
-  check-dependency kubectl
+  check-dependencies kubectl
   if kubectl get namespace ${1} >/dev/null 2>&1; then
     if kubectl -n ${1} rollout status deployment ${2} >/dev/null 2>&1; then
       return 0
@@ -164,7 +167,7 @@ check-deployed() {
 }
 
 deploy-agent() {
-  check-dependency kubectl
+  check-dependencies kubectl
   check-undeployed jetstack-secure agent
   approve-destructive-operation
 
@@ -185,7 +188,7 @@ deploy-agent() {
 }
 
 install-operator() {
-  check-dependency kubectl
+  check-dependencies kubectl
   check-undeployed jetstack-secure js-operator-operator
   approve-destructive-operation
 
@@ -208,7 +211,7 @@ install-operator() {
 }
 
 deploy-operator-components() {
-  check-dependency kubectl
+  check-dependencies kubectl
   check-undeployed jetstack-secure cert-manager
   approve-destructive-operation
 
@@ -237,7 +240,7 @@ EOF
 }
 
 create-self-signed-issuer() {
-  check-dependency kubectl
+  check-dependencies kubectl
   check-deployed jetstack-secure cert-manager
   approve-destructive-operation
 
@@ -258,7 +261,7 @@ EOF
 }
 
 create-demo-certs() {
-  check-dependency kubectl
+  check-dependencies kubectl
   check-deployed jetstack-secure cert-manager
   approve-destructive-operation
 
@@ -295,7 +298,7 @@ usage() {
   echo "Available Commands:"
   echo "  get-oauth-token            Obtains token for TLSPK_SA_USER_ID/TLSPK_SA_USER_SECRET pair"
   echo "  get-dockerconfig           Obtains Docker-compatible registry config / image pull secret (as used with 'helm upgrade --registry-config')"
-  echo "  discover-certs             TODO"
+  echo "  discover-tls-secrets       Scan the current cluster for TLS secrets (i.e. certificates)"
   echo "  deploy-agent               Deploys the TLSPK agent component"
   echo "  install-operator           Installs the TLSPK operator"
   echo "  deploy-operator-components Deploys minimal operator components, incluing cert-manager"
@@ -321,7 +324,7 @@ if [ "${DEBUG}" == "true" ]; then
 fi
 
 check-vars "TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET"
-check-dependency curl
+check-dependencies curl
 derive-org-from-user
 
 if [[ $# -eq 0 ]]; then set "usage"; fi # fake arg if none
@@ -330,7 +333,7 @@ set -u
 unset COMMAND APPROVED
 while [[ $# -gt 0 ]]; do
   case $1 in
-    'usage'|'get-oauth-token'|'get-dockerconfig'|'discover-certs'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-demo-certs')
+    'usage'|'get-oauth-token'|'get-dockerconfig'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-demo-certs')
       COMMAND=$1
       ;;
     '--auto-approve')
