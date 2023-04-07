@@ -16,7 +16,7 @@ function logger() {
 }
 
 finally() {
-  local result=$?
+  result=$?
   if [ "$result" != "0" ]; then
     echo "aborting!"
   fi
@@ -24,7 +24,7 @@ finally() {
 }
 
 check-vars() {
-  local result=
+  result=0
   for var in "$@"; do
     if [[ -z "${!var}" ]]; then
       echo "$var is not set"
@@ -45,15 +45,15 @@ check-dependencies() {
 }
 
 get-oauth-token() {
-  local outfile=$(mktemp)
-  local http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${outfile} https://auth.jetstack.io/oauth/token \
+  outfile=$(mktemp)
+  http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${outfile} https://auth.jetstack.io/oauth/token \
     --data "audience=https://preflight.jetstack.io/api/v1" \
     --data "client_id=jmQwDGl86WAevq6K6zZo6hJ4WUvp14yD" \
     --data "grant_type=password" \
     --data "username=${TLSPK_SA_USER_ID}" \
     --data-urlencode "password=${TLSPK_SA_USER_SECRET}")
   cat ${outfile} && rm ${outfile}
-  if grep -qv "^2" <<< ${http_code}; then return 127; fi
+  if grep -qv "^2" <<< ${http_code}; then return 1; fi
 }
 
 derive-org-from-user() {
@@ -65,12 +65,20 @@ get-secret-name() {
 }
 
 create-secret() {
-  local oauth_token_json=$(get-oauth-token)
-  
-  local oauth_token=$(jq .access_token --raw-output <<< ${oauth_token_json})
-  local pull_secret_request='[{"id":"","displayName":"'"$(get-secret-name)"'"}]'
-  local outfile=$(mktemp)
-  local http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${outfile} -X POST https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts \
+  set +e
+  result=$(get-oauth-token)
+  exit_code=$?
+  set -e
+  if [ ${exit_code} -ne 0 ]; then
+    echo ${result}
+    return 1
+  fi
+  oauth_token_json=${result}
+
+  oauth_token=$(jq .access_token --raw-output <<< ${oauth_token_json})
+  pull_secret_request='[{"id":"","displayName":"'"$(get-secret-name)"'"}]'
+  outfile=$(mktemp)
+  http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${outfile} -X POST https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts \
     --header "authorization: Bearer ${oauth_token}" \
     --data "${pull_secret_request}")
   cat ${outfile} && rm ${outfile}
@@ -86,7 +94,7 @@ get-secret-filename() {
 }
 
 get-secret() {
-  local secret_filename=$(get-secret-filename)
+  secret_filename=$(get-secret-filename)
   if ! [ -f ${secret_filename} ]; then
     mkdir -p $(get-config-dir)
     create-secret > ${secret_filename}
@@ -95,19 +103,17 @@ get-secret() {
 }
 
 extract-secret-data() {
-  local result=
   if ! result=$(get-secret); then echo ${result}; return 126; fi
-  jq '.[0].key.privateData' --raw-output <<< ${result} | base64 --decode
+  jq '.[0].key.privateData' --raw-output <<< ${result} | base64 --decode -${BASE64_WRAP_SWITCH} 0
 }
 
 get-dockerconfig()
 {
-  check-dependencies jq # via extract-secret-data
-  local pullsecret_file=$(mktemp)
+  pullsecret_file=$(mktemp)
   extract-secret-data > ${pullsecret_file}
 
   # despite documentation to the contrary, I don't believe "auths:eu.gcr.io:password" is required, so it's omitted
-  local dockerconfigjson_file=$(mktemp)
+  dockerconfigjson_file=$(mktemp)
   cat <<-EOF > ${dockerconfigjson_file}
   {
     "auths": {
@@ -139,13 +145,11 @@ approve-destructive-operation() {
 }
 
 discover-tls-secrets() {
-  check-dependencies jq kubectl
   show-cluster-status
   kubectl get --raw /api/v1/secrets | jq -r '.items[] | select(.type == "kubernetes.io/tls") | "/namespaces/\(.metadata.namespace)/secrets/\(.metadata.name)"'
 }
 
 check-undeployed() {
-  check-dependencies kubectl
   if kubectl get namespace ${1} >/dev/null 2>&1; then
     if kubectl -n ${1} rollout status deployment ${2} >/dev/null 2>&1; then
       echo "${1}/${2} is already deployed"
@@ -156,7 +160,6 @@ check-undeployed() {
 }
 
 check-deployed() {
-  check-dependencies kubectl
   if kubectl get namespace ${1} >/dev/null 2>&1; then
     if kubectl -n ${1} rollout status deployment ${2} >/dev/null 2>&1; then
       return 0
@@ -167,15 +170,14 @@ check-deployed() {
 }
 
 deploy-agent() {
-  check-dependencies kubectl
   check-undeployed jetstack-secure agent
   approve-destructive-operation
 
   logger "deploying TLSPK agent"
 
-  local json_creds='{"user_id": "'"${TLSPK_SA_USER_ID}"'","user_secret": "'"$(echo ${TLSPK_SA_USER_SECRET} | sed 's/"/\\"/g')"'"}'
-  local json_creds_b64=$(echo ${json_creds} | base64 -${BASE64_WRAP_SWITCH} 0)
-  local tlkps_cluster_name_adj=$(tr "-" "_" <<< ${TLSPK_CLUSTER_NAME})
+  json_creds='{"user_id": "'"${TLSPK_SA_USER_ID}"'","user_secret": "'"$(echo ${TLSPK_SA_USER_SECRET} | sed 's/"/\\"/g')"'"}'
+  json_creds_b64=$(echo ${json_creds} | base64 -${BASE64_WRAP_SWITCH} 0)
+  tlkps_cluster_name_adj=$(tr "-" "_" <<< ${TLSPK_CLUSTER_NAME})
   curl -sL https://raw.githubusercontent.com/jetstack/jsctl/main/internal/cluster/templates/agent.yaml | \
     sed "s/{{ .Organization }}/${TLSPK_ORG}/g" | \
     sed "s/{{ .Name }}/${tlkps_cluster_name_adj}/g" | \
@@ -188,7 +190,6 @@ deploy-agent() {
 }
 
 install-operator() {
-  check-dependencies kubectl
   check-undeployed jetstack-secure js-operator-operator
   approve-destructive-operation
 
@@ -211,7 +212,6 @@ install-operator() {
 }
 
 deploy-operator-components() {
-  check-dependencies kubectl
   check-undeployed jetstack-secure cert-manager
   approve-destructive-operation
 
@@ -240,7 +240,6 @@ EOF
 }
 
 create-self-signed-issuer() {
-  check-dependencies kubectl
   check-deployed jetstack-secure cert-manager
   approve-destructive-operation
 
@@ -261,14 +260,13 @@ EOF
 }
 
 create-demo-certs() {
-  check-dependencies kubectl
   check-deployed jetstack-secure cert-manager
   approve-destructive-operation
 
   logger "create demo certs"
 
   kubectl create namespace demo-certs
-  local vars=("hydrogen" "helium" "lithium" "beryllium" "boron" "carbon" "nitrogen" "oxygen" "fluorine" "neon")
+  vars=("hydrogen" "helium" "lithium" "beryllium" "boron" "carbon" "nitrogen" "oxygen" "fluorine" "neon")
   for var in "${vars[@]}"; do
     if [[ -z "${!var}" ]]; then
     cat << EOF | kubectl -n demo-certs apply -f -
@@ -324,7 +322,7 @@ if [ "${DEBUG}" == "true" ]; then
 fi
 
 check-vars "TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET"
-check-dependencies curl
+check-dependencies curl jq kubectl
 derive-org-from-user
 
 if [[ $# -eq 0 ]]; then set "usage"; fi # fake arg if none
@@ -333,7 +331,7 @@ set -u
 unset COMMAND APPROVED
 while [[ $# -gt 0 ]]; do
   case $1 in
-    'usage'|'get-oauth-token'|'get-dockerconfig'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-demo-certs')
+    'usage'|'get-oauth-token'|'get-dockerconfig'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-demo-certs'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
       COMMAND=$1
       ;;
     '--auto-approve')
@@ -359,7 +357,7 @@ set +u
 
 : ${OPERATOR_VERSION:=${OPERATOR_VERSION_DEFAULT}}
 
-if kubectl config current-context >/dev/null &2>1; then
+if kubectl config current-context >/dev/null 2>&1; then
   : ${TLSPK_CLUSTER_NAME:=$(kubectl config current-context | cut -c-23)-$(date +"%y%m%d%H%M")}
 else  
   : ${TLSPK_CLUSTER_NAME:=k8s-$(date +"%y%m%d%H%M")}
