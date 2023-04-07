@@ -3,6 +3,11 @@
 # TODO
 # - '--auto-approve' on its own should fail
 # - make certificate generation a little more interesting
+# see if I can reduce mktemp use, or use tmp folder which gets cleaned up on EXIT
+# use more constructs like this to reduce code size and variable usage (if ! result=$(get-secret); then echo ${result}; return 126; fi)
+# work out why constructs like result=$(extract-secret-data) in get-dockerconfig cause base64 to blow up (definitely a quotes thing, but tempfiles seem to work OK for now).
+# work on eliminating the "side effect" in get-dockerconfig
+# deploy-agent will only successfully deploy the agent is the USER_ID and USER_SECRET being correct, which we can test by calling get-oauth-token
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
@@ -12,7 +17,7 @@ BASE64_WRAP_SWITCH=$(uname | grep -q Darwin && echo b || echo w)
 : ${DEBUG:="false"}
 
 function logger() {
-  true # echo "${SCRIPT_NAME}: $1"
+  echo "${SCRIPT_NAME}: $1"
 }
 
 finally() {
@@ -97,20 +102,35 @@ get-secret() {
   secret_filename=$(get-secret-filename)
   if ! [ -f ${secret_filename} ]; then
     mkdir -p $(get-config-dir)
-    create-secret > ${secret_filename}
+    set +e
+    result=$(create-secret)
+    exit_code=$?
+    set -e
+    if [ ${exit_code} -ne 0 ]; then
+      echo ${result}
+      return 1
+    fi
+    echo ${result} > ${secret_filename}
   fi
   cat ${secret_filename}
 }
 
 extract-secret-data() {
-  if ! result=$(get-secret); then echo ${result}; return 126; fi
+  if ! result=$(get-secret); then echo ${result}; return 1; fi
   jq '.[0].key.privateData' --raw-output <<< ${result} | base64 --decode -${BASE64_WRAP_SWITCH} 0
 }
 
 get-dockerconfig()
 {
   pullsecret_file=$(mktemp)
+  set +e
   extract-secret-data > ${pullsecret_file}
+  exit_code=$?
+  set -e
+  if [ ${exit_code} -ne 0 ]; then
+    echo ${result} # works due to convenient side-effect of not using "local" vars (this was set up in extract-secret-data)
+    return 1
+  fi
 
   # despite documentation to the contrary, I don't believe "auths:eu.gcr.io:password" is required, so it's omitted
   dockerconfigjson_file=$(mktemp)
@@ -129,7 +149,7 @@ cat ${dockerconfigjson_file} && rm ${dockerconfigjson_file} && rm ${pullsecret_f
 }
 
 show-cluster-status() {
-  echo "Current context is $(kubectl config current-context)"
+  logger "Current context is $(kubectl config current-context)"
   kubectl cluster-info | head -2
 }
 
@@ -139,13 +159,14 @@ approve-destructive-operation() {
     read -p "Are you sure you want to approved this action? [y/N]" APPROVED
   fi
   if grep -qv "^y\|Y" <<< ${APPROVED}; then
-    echo "Potentially destructive operation not approved. Override with '--auto-approve'"
+    logger "potentially destructive operation not approved. Override with '--auto-approve'"
     return 1
   fi
 }
 
 discover-tls-secrets() {
   show-cluster-status
+  logger "The following certificates were discovered:"
   kubectl get --raw /api/v1/secrets | jq -r '.items[] | select(.type == "kubernetes.io/tls") | "/namespaces/\(.metadata.namespace)/secrets/\(.metadata.name)"'
 }
 
@@ -186,7 +207,7 @@ deploy-agent() {
   
   logger "deploying TLSPK agent: awaiting steady state"
   sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=-1s
-  echo "Cluster will appear in TLSPK as ${tlkps_cluster_name_adj}"
+  logger "cluster will appear in TLSPK as ${tlkps_cluster_name_adj}"
 }
 
 install-operator() {
