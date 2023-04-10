@@ -162,7 +162,7 @@ show-cluster-status() {
 approve-destructive-operation() {
   show-cluster-status
   if [ -z ${APPROVED+x} ]; then
-    read -p "Are you sure you want to approve this action? [y/N] " APPROVED
+    read -p "Are you sure? [y/N] " APPROVED
   fi
   if grep -qv "^y\|Y" <<< ${APPROVED}; then
     logger "potentially destructive operation not approved. Override with '--auto-approve'"
