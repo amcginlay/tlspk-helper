@@ -6,8 +6,7 @@
 # use more constructs like this to reduce code size and variable usage (if ! result=$(get-secret); then echo ${result}; return 126; fi)
 # work out why constructs like result=$(extract-secret-data) in get-dockerconfig cause base64 to blow up (definitely a quotes thing, but tempfiles seem to work OK for now).
 # work on eliminating the "side effect" in get-dockerconfig
-# deploy-agent will only successfully deploy the agent is the USER_ID and USER_SECRET being correct, which we can test by calling get-oauth-token
-# would like to find a way of creatin g expired certs on MacOS (openssl -days param is +ve only)
+# would like to find a way of creating expired certs on MacOS (openssl -days param is +ve only)
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
@@ -59,6 +58,13 @@ get-oauth-token() {
     --data-urlencode "password=${TLSPK_SA_USER_SECRET}")
   cat ${outfile} && rm ${outfile}
   if grep -qv "^2" <<< ${http_code}; then return 1; fi
+}
+
+check-auth() {
+  if ! get-oauth-token >/dev/null 2>&1; then
+    logger "TLSPK_SA_USER_ID and/or TLSPK_SA_USER_SECRET creds do not yield an OAuth token. Check and correct before retrying."
+    exit 1
+  fi
 }
 
 derive-org-from-user() {
@@ -220,6 +226,7 @@ check-deployed() {
 
 deploy-agent() {
   check-undeployed jetstack-secure agent
+  check-auth
   approve-destructive-operation
 
   logger "deploying TLSPK agent"
@@ -385,7 +392,7 @@ set -u
 unset COMMAND APPROVED
 while [[ $# -gt 0 ]]; do
   case $1 in
-    'usage'|'get-oauth-token'|'get-dockerconfig'|'create-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-cert-manager-certs'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
+    'usage'|'check-auth'|'get-oauth-token'|'get-dockerconfig'|'create-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-cert-manager-certs'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
       COMMAND=$1
       ;;
     '--auto-approve')
