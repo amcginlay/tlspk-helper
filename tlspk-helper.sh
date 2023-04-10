@@ -168,29 +168,27 @@ create-tls-secrets() {
   temp_dir=$(mktemp -d)
 
   cat <<EOF > ${temp_dir}/ssl.conf
-[ req ]
-default_bits		= 2048
-distinguished_name	= req_distinguished_name
-req_extensions		= req_ext
-
-[ req_distinguished_name ]
-commonName          = kryptonite.elements.com
-
-[ req_ext ]
-keyUsage            = digitalSignature, keyEncipherment
-extendedKeyUsage    = serverAuth
-subjectAltName      = @alt_names
-
-[ alt_names ]
-DNS.1               = kryptonite.elements.com
+  [ req ]
+  default_bits		= 2048
+  distinguished_name	= req_distinguished_name
+  req_extensions		= req_ext
+  
+  [ req_distinguished_name ]
+  commonName          = kryptonite.elements.com
+  
+  [ req_ext ]
+  keyUsage            = digitalSignature, keyEncipherment
+  extendedKeyUsage    = serverAuth
+  subjectAltName      = @alt_names
+  
+  [ alt_names ]
+  DNS.1               = kryptonite.elements.com
 EOF
   openssl genrsa -out ${temp_dir}/key.pem 2048
   openssl req -new -key ${temp_dir}/key.pem -out ${temp_dir}/csr.pem -subj "/CN=kryptonite.elements.com" -reqexts req_ext -config ${temp_dir}/ssl.conf
   openssl x509 -req -in ${temp_dir}/csr.pem -signkey ${temp_dir}/key.pem -out ${temp_dir}/cert.pem -days 1 -extensions req_ext -extfile ${temp_dir}/ssl.conf
-  openssl x509 -in ${temp_dir}/cert.pem -out ${temp_dir}/cert.crt
-  openssl rsa -in ${temp_dir}/key.pem -out ${temp_dir}/key.key
   kubectl create namespace demo-certs 2>/dev/null || true
-  kubectl -n demo-certs create secret tls kryptonite-elements-com-tls --cert=${temp_dir}/cert.crt --key=${temp_dir}/key.key
+  kubectl -n demo-certs create secret tls kryptonite-elements-com-tls --cert=${temp_dir}/cert.pem --key=${temp_dir}/key.pem
   rm -rf ${temp_dir}
 }
 
