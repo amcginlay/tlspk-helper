@@ -2,12 +2,12 @@
 
 # TODO
 # - '--auto-approve' on its own should fail
-# - make certificate generation a little more interesting
 # see if I can reduce mktemp use, or use tmp folder which gets cleaned up on EXIT
 # use more constructs like this to reduce code size and variable usage (if ! result=$(get-secret); then echo ${result}; return 126; fi)
 # work out why constructs like result=$(extract-secret-data) in get-dockerconfig cause base64 to blow up (definitely a quotes thing, but tempfiles seem to work OK for now).
 # work on eliminating the "side effect" in get-dockerconfig
 # deploy-agent will only successfully deploy the agent is the USER_ID and USER_SECRET being correct, which we can test by calling get-oauth-token
+# would like to find a way of creatin g expired certs on MacOS (openssl -days param is +ve only)
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
@@ -164,6 +164,36 @@ approve-destructive-operation() {
   fi
 }
 
+create-tls-secrets() {
+  temp_dir=$(mktemp -d)
+
+  cat <<EOF > ${temp_dir}/ssl.conf
+[ req ]
+default_bits		= 2048
+distinguished_name	= req_distinguished_name
+req_extensions		= req_ext
+
+[ req_distinguished_name ]
+commonName          = kryptonite.elements.com
+
+[ req_ext ]
+keyUsage            = digitalSignature, keyEncipherment
+extendedKeyUsage    = serverAuth
+subjectAltName      = @alt_names
+
+[ alt_names ]
+DNS.1               = kryptonite.elements.com
+EOF
+  openssl genrsa -out ${temp_dir}/key.pem 2048
+  openssl req -new -key ${temp_dir}/key.pem -out ${temp_dir}/csr.pem -subj "/CN=kryptonite.elements.com" -reqexts req_ext -config ${temp_dir}/ssl.conf
+  openssl x509 -req -in ${temp_dir}/csr.pem -signkey ${temp_dir}/key.pem -out ${temp_dir}/cert.pem -days 1 -extensions req_ext -extfile ${temp_dir}/ssl.conf
+  openssl x509 -in ${temp_dir}/cert.pem -out ${temp_dir}/cert.crt
+  openssl rsa -in ${temp_dir}/key.pem -out ${temp_dir}/key.key
+  kubectl create namespace demo-certs 2>/dev/null || true
+  kubectl -n demo-certs create secret tls kryptonite-elements-com-tls --cert=${temp_dir}/cert.crt --key=${temp_dir}/key.key
+  rm -rf ${temp_dir}
+}
+
 discover-tls-secrets() {
   show-cluster-status
   logger "The following certificates were discovered:"
@@ -215,7 +245,7 @@ install-operator() {
   approve-destructive-operation
 
   logger "replicating secret into cluster"
-  kubectl create namespace jetstack-secure >/dev/null 2>&1 || true
+  kubectl create namespace jetstack-secure 2>/dev/null || true
   kubectl -n jetstack-secure delete secret jse-gcr-creds >/dev/null 2>&1 || true
   kubectl -n jetstack-secure create secret docker-registry jse-gcr-creds --from-file .dockerconfigjson=<(get-dockerconfig)
 
@@ -280,31 +310,35 @@ EOF
   sleep 5 # not sure we can "wait" on anything so just give the issuer a moment to appear
 }
 
-create-demo-certs() {
+create-cert-manager-certs() {
   check-deployed jetstack-secure cert-manager
   approve-destructive-operation
 
-  logger "create demo certs"
+  logger "create cert-manager certs"
 
-  kubectl create namespace demo-certs
-  vars=("hydrogen" "helium" "lithium" "beryllium" "boron" "carbon" "nitrogen" "oxygen" "fluorine" "neon")
-  for var in "${vars[@]}"; do
-    if [[ -z "${!var}" ]]; then
+  kubectl create namespace demo-certs 2>/dev/null || true
+  subdomains=("hydrogen" "helium" "lithium" "beryllium" "boron" "carbon" "nitrogen" "oxygen" "fluorine" "neon")
+  durations=( "8760"     "4320"   "2160"    "720"       "240"   "120"    "96"       "24"     "6"        "1")
+  for i in "${!subdomains[@]}"; do
     cat << EOF | kubectl -n demo-certs apply -f -
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
-      name: ${var}.elements.com
+      name: ${subdomains[i]}.elements.com
     spec:
-      secretName: ${var}-elements-com-tls
+      secretName: ${subdomains[i]}-elements-com-tls
       dnsNames:
-        - ${var}.elements.com
+        - ${subdomains[i]}.elements.com
+      duration: ${durations[i]}h
+      usages:
+      - digital signature
+      - key encipherment
+      - server auth
       issuerRef:
         name: self-signed
         kind: ClusterIssuer
         group: cert-manager.io
 EOF
-    fi
   done
 }
 
@@ -317,12 +351,13 @@ usage() {
   echo "Available Commands:"
   echo "  get-oauth-token            Obtains token for TLSPK_SA_USER_ID/TLSPK_SA_USER_SECRET pair"
   echo "  get-dockerconfig           Obtains Docker-compatible registry config / image pull secret (as used with 'helm upgrade --registry-config')"
-  echo "  discover-tls-secrets       Scan the current cluster for TLS secrets (i.e. certificates)"
+  echo "  create-tls-secrets         Use openssl to define a pair of TLS Secrets in the demo-certs namespace"
+  echo "  discover-tls-secrets       Scan the current cluster for TLS secrets"
   echo "  deploy-agent               Deploys the TLSPK agent component"
   echo "  install-operator           Installs the TLSPK operator"
   echo "  deploy-operator-components Deploys minimal operator components, incluing cert-manager"
   echo "  create-self-signed-issuer  Use cert-manager ClusterIssuer CRD to define a cluster-wide self-signed issuer"
-  echo "  create-demo-certs          Use cert-manager Certificate CRD to define a collection of self-signed certificates in the demo-certs namespace"
+  echo "  create-cert-manager-certs  Use cert-manager Certificate CRD to define a collection of self-signed certificates in the demo-certs namespace"
   echo
   echo "Flags:"
   echo "  --auto-approve             Suppress prompts regarding potentially destructive operations"
@@ -343,7 +378,7 @@ if [ "${DEBUG}" == "true" ]; then
 fi
 
 check-vars "TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET"
-check-dependencies curl jq kubectl
+check-dependencies curl jq kubectl openssl
 derive-org-from-user
 
 if [[ $# -eq 0 ]]; then set "usage"; fi # fake arg if none
@@ -352,7 +387,7 @@ set -u
 unset COMMAND APPROVED
 while [[ $# -gt 0 ]]; do
   case $1 in
-    'usage'|'get-oauth-token'|'get-dockerconfig'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-demo-certs'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
+    'usage'|'get-oauth-token'|'get-dockerconfig'|'create-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-cert-manager-certs'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
       COMMAND=$1
       ;;
     '--auto-approve')
