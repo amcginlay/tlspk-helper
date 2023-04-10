@@ -170,7 +170,7 @@ approve-destructive-operation() {
   fi
 }
 
-create-tls-secrets() {
+create-unsafe-tls-secrets() {
   temp_dir=$(mktemp -d)
 
   cat <<EOF > ${temp_dir}/ssl.conf
@@ -315,7 +315,7 @@ EOF
   sleep 5 # not sure we can "wait" on anything so just give the issuer a moment to appear
 }
 
-create-cert-manager-certs() {
+create-safe-tls-secrets() {
   check-deployed jetstack-secure cert-manager
   approve-destructive-operation
 
@@ -356,13 +356,13 @@ usage() {
   echo "Available Commands:"
   echo "  get-oauth-token            Obtains token for TLSPK_SA_USER_ID/TLSPK_SA_USER_SECRET pair"
   echo "  get-dockerconfig           Obtains Docker-compatible registry config / image pull secret (as used with 'helm upgrade --registry-config')"
-  echo "  create-tls-secrets         Use openssl to define a pair of TLS Secrets in the demo-certs namespace"
+  echo "  create-unsafe-tls-secrets  Define TLS Secrets in the demo-certs namespace (NOT protected by cert-manager)"
   echo "  discover-tls-secrets       Scan the current cluster for TLS secrets"
   echo "  deploy-agent               Deploys the TLSPK agent component"
   echo "  install-operator           Installs the TLSPK operator"
   echo "  deploy-operator-components Deploys minimal operator components, incluing cert-manager"
   echo "  create-self-signed-issuer  Use cert-manager ClusterIssuer CRD to define a cluster-wide self-signed issuer"
-  echo "  create-cert-manager-certs  Use cert-manager Certificate CRD to define a collection of self-signed certificates in the demo-certs namespace"
+  echo "  create-safe-tls-secrets    Use cert-manager Certificate CRD to define a collection of self-signed certificates in the demo-certs namespace"
   echo
   echo "Flags:"
   echo "  --auto-approve             Suppress prompts regarding potentially destructive operations"
@@ -392,7 +392,7 @@ set -u
 unset COMMAND APPROVED
 while [[ $# -gt 0 ]]; do
   case $1 in
-    'usage'|'check-auth'|'get-oauth-token'|'get-dockerconfig'|'create-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-cert-manager-certs'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
+    'usage'|'check-auth'|'get-oauth-token'|'get-dockerconfig'|'create-unsafe-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-safe-tls-secrets'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
       COMMAND=$1
       ;;
     '--auto-approve')
