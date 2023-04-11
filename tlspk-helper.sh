@@ -36,14 +36,37 @@ check-vars() {
   return ${exit_code}
 }
 
-check-dependencies() {
-  while [[ $# -gt 0 ]]; do
-    command -v ${1} >/dev/null 2>&1 || {
-      echo "missing dependency: ${1}"
-      return 1
-  }
-    shift
-  done
+get-os() {
+  result=$(uname -a)
+  grep -q "amzn" <<< ${result} && echo "amzn" && return
+  grep -q "Ubuntu" <<< ${result} && echo "ubuntu" && return
+  grep -q "Darwin" <<< ${result} && echo "darwin" && return
+  echo "Unsupported OS"
+  return 1
+}
+
+check-tools() {
+  which jq git kubectl helm > /dev/null 2>&1 && return
+}
+
+install-tools() {
+  check-tools && return
+
+  logger "will install the following tools: jq git kubectl helm"
+  approve-destructive-operation
+
+  os=$(get-os)
+  grep -q "amzn"   <<< ${os} && sudo yum install -y jq git
+  grep -q "ubuntu" <<< ${os} && sudo apt install -y jq git
+  grep -q "darwin" <<< ${os} && brew install js git
+
+  curl -O -s https://s3.us-west-2.amazonaws.com/amazon-eks/1.25.7/2023-03-17/bin/$(uname | tr '[:upper:]' '[:lower:]')/amd64/kubectl
+  chmod +x ./kubectl
+  sudo mv ./kubectl /usr/local/bin/
+  
+  curl -fsSL -o ${temp_dir}/get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+  chmod 700 ${temp_dir}/get_helm.sh
+  ${temp_dir}/get_helm.sh
 }
 
 get-oauth-token() {
@@ -359,8 +382,9 @@ if [ "${DEBUG}" == "true" ]; then
 fi
 
 temp_dir=$(mktemp -d)
+if ! os=$(get-os); then logger ${os}; exit 1; fi
 check-vars "TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET"
-check-dependencies jq git kubectl
+install-tools
 derive-org-from-user
 
 if [[ $# -eq 0 ]]; then set "usage"; fi # fake arg if none
@@ -369,7 +393,7 @@ set -u
 unset COMMAND APPROVED
 while [[ $# -gt 0 ]]; do
   case $1 in
-    'usage'|'get-oauth-token'|'get-dockerconfig'|'create-unsafe-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-safe-tls-secrets'|'check-auth'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
+    'usage'|'install-tools'|'get-oauth-token'|'get-dockerconfig'|'create-unsafe-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-safe-tls-secrets'|'check-auth'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
       COMMAND=$1
       ;;
     '--auto-approve')
