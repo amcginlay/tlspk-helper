@@ -5,6 +5,7 @@
 brew install fsevents-tools
 
 bucket=venafi-ecosystem-dev # drop the "-dev" as appropriate
+
 while true; do
   notifywait ./tlspk-helper.sh
   echo "uploading tlspk-helper.sh"
