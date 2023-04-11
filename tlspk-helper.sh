@@ -41,7 +41,7 @@ check-dependencies() {
     command -v ${1} >/dev/null 2>&1 || {
       echo "missing dependency: ${1}"
       return 1
-    }
+  }
     shift
   done
 }
@@ -60,7 +60,7 @@ get-oauth-token() {
 check-auth() {
   if ! get-oauth-token >/dev/null 2>&1; then
     logger "TLSPK_SA_USER_ID and/or TLSPK_SA_USER_SECRET creds do not yield an OAuth token. Check and correct before retrying."
-    exit 1
+    return 1
   fi
 }
 
@@ -137,7 +137,6 @@ show-cluster-status() {
 }
 
 approve-destructive-operation() {
-  show-cluster-status
   if [ -z ${APPROVED+x} ]; then
     read -p "Are you sure? [y/N] " APPROVED
   fi
@@ -201,6 +200,7 @@ check-deployed() {
 deploy-agent() {
   check-undeployed jetstack-secure agent
   check-auth
+  show-cluster-status
   approve-destructive-operation
 
   logger "deploying TLSPK agent"
@@ -221,6 +221,7 @@ deploy-agent() {
 
 install-operator() {
   check-undeployed jetstack-secure js-operator-operator
+  show-cluster-status
   approve-destructive-operation
 
   logger "replicating secret into cluster"
@@ -243,6 +244,7 @@ install-operator() {
 
 deploy-operator-components() {
   check-undeployed jetstack-secure cert-manager
+  show-cluster-status
   approve-destructive-operation
 
   logger "deploy operator components (inc. cert-manager)"
@@ -271,6 +273,7 @@ EOF
 
 create-self-signed-issuer() {
   check-deployed jetstack-secure cert-manager
+  show-cluster-status
   approve-destructive-operation
 
   logger "creating a self-signed issuer"
@@ -289,6 +292,7 @@ EOF
 
 create-safe-tls-secrets() {
   check-deployed jetstack-secure cert-manager
+  show-cluster-status
   approve-destructive-operation
 
   logger "create cert-manager certs"
@@ -392,7 +396,7 @@ set +u
 : ${OPERATOR_VERSION:=${OPERATOR_VERSION_DEFAULT}}
 
 if kubectl config current-context >/dev/null 2>&1; then
-  : ${TLSPK_CLUSTER_NAME:=$(kubectl config current-context | cut -c-23)-$(date +"%y%m%d%H%M")}
+  : ${TLSPK_CLUSTER_NAME:=$(kubectl config current-context | tr '@' '.' | cut -c-21)-$(date +"%y%m%d%H%M")}
 else  
   : ${TLSPK_CLUSTER_NAME:=k8s-$(date +"%y%m%d%H%M")}
 fi
