@@ -360,7 +360,7 @@ fi
 
 temp_dir=$(mktemp -d)
 check-vars "TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET"
-check-dependencies curl jq kubectl openssl
+check-dependencies jq git kubectl
 derive-org-from-user
 
 if [[ $# -eq 0 ]]; then set "usage"; fi # fake arg if none
