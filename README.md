@@ -4,10 +4,11 @@
 # on MacOS
 brew install fsevents-tools
 
+target_bucket=venafi-ecosystem-dev # drop the "-dev" as appropriate
 while true
   do notifywait ./tlspk-helper.sh
   echo "uploading tlspk-helper.sh"
-  aws s3 cp tlspk-helper.sh s3://venafi-ecosystem-dev/tlspk/tlspk-helper.sh # drop the "-dev" as appropriate 
+  aws s3 cp tlspk-helper.sh s3://${target_bucket}/tlspk/tlspk-helper.sh
 done
 ```
 
