@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 
 # TODO
-# use more constructs like this to reduce code size and variable usage (if ! result=$(get-secret); then echo ${result}; return 126; fi)
 # work out why constructs like result=$(extract-secret-data) in get-dockerconfig cause base64 to blow up (definitely a quotes thing, but tempfiles seem to work OK for now).
-# work on eliminating the "side effect" in get-dockerconfig
+# work on eliminating the ugly "side effect" in get-dockerconfig
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
@@ -13,28 +12,28 @@ OPENSSL_NEGATIVE_DAYS=$(uname | grep -q Darwin && echo || echo -) # MacOS openss
 
 : ${DEBUG:="false"}
 
-function logger() {
+logger() {
   echo "${SCRIPT_NAME}: $1"
 }
 
 finally() {
-  result=$?
-  if [ "$result" != "0" ]; then
+  exit_code=$?
+  if [ "$exit_code" != "0" ]; then
     echo "aborting!"
   fi
   rm -rf ${temp_dir}
-  exit $result
+  exit $exit_code
 }
 
 check-vars() {
-  result=0
+  exit_code=0
   for var in "$@"; do
     if [[ -z "${!var}" ]]; then
       echo "$var is not set (use export)"
-      result=1
+      exit_code=1
     fi
   done
-  return ${result}
+  return ${exit_code}
 }
 
 check-dependencies() {
@@ -75,15 +74,9 @@ get-secret-name() {
 
 create-secret() {
   set +e
-  result=$(get-oauth-token)
-  exit_code=$?
+  if ! oauth_token_json=$(get-oauth-token); then echo ${oauth_token_json}; return 1; fi
   set -e
-  if [ ${exit_code} -ne 0 ]; then
-    echo ${result}
-    return 1
-  fi
-  oauth_token_json=${result}
-
+    
   oauth_token=$(jq .access_token --raw-output <<< ${oauth_token_json})
   pull_secret_request='[{"id":"","displayName":"'"$(get-secret-name)"'"}]'
   http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/svc_account.out -X POST https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts \
@@ -106,33 +99,22 @@ get-secret() {
   if ! [ -f ${secret_filename} ]; then
     mkdir -p $(get-config-dir)
     set +e
-    result=$(create-secret)
-    exit_code=$?
-    set -e
-    if [ ${exit_code} -ne 0 ]; then
-      echo ${result}
-      return 1
-    fi
-    echo ${result} > ${secret_filename}
+    if ! secret=$(create-secret); then echo ${secret}; return 1; fi
+    echo ${secret} > ${secret_filename}
   fi
   cat ${secret_filename}
 }
 
 extract-secret-data() {
-  if ! result=$(get-secret); then echo ${result}; return 1; fi
-  jq '.[0].key.privateData' --raw-output <<< ${result} | base64 --decode -${BASE64_WRAP_SWITCH} 0
+  if ! secret=$(get-secret); then echo ${secret}; return 1; fi
+  jq '.[0].key.privateData' --raw-output <<< ${secret} | base64 --decode -${BASE64_WRAP_SWITCH} 0
 }
 
 get-dockerconfig()
 {
   set +e
-  extract-secret-data > ${temp_dir}/pull_secret.out
-  exit_code=$?
+  if ! extract-secret-data > ${temp_dir}/pull_secret.out; then echo ${secret}; return 1; fi # NOTE secret set in extract-secret-data (side effect)
   set -e
-  if [ ${exit_code} -ne 0 ]; then
-    echo ${result} # works due to convenient side-effect of not using "local" vars (this was set up in extract-secret-data)
-    return 1
-  fi
 
   # despite documentation to the contrary, I don't believe "auths:eu.gcr.io:password" is required, so it's omitted
   cat <<-EOF > ${temp_dir}/dockerconfig_json.out
