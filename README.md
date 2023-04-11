@@ -15,6 +15,6 @@ done
 Invoke as follows:
 ```
 cd
-curl -fsSL -o tlspk-helper.sh https://venafi-ecosystem.s3.amazonaws.com/tlspk/tlspk-helper.sh && chmod 700 tlspk-helper.sh
+curl -fsSL -o tlspk-helper.sh https://${target_bucket}.s3.amazonaws.com/tlspk/tlspk-helper.sh && chmod 700 tlspk-helper.sh
 ./tlspk-helper.sh
 ```
