@@ -3,6 +3,8 @@
 # TODO
 # work out why constructs like result=$(extract-secret-data) in get-dockerconfig cause base64 to blow up (definitely a quotes thing, but tempfiles seem to work OK for now).
 # work on eliminating the ugly "side effect" in get-dockerconfig
+# if I'm on Amazon Linux I think we should fail unless whoami is ec2-user or ubuntu (ssm-user will need to sudo su ec2-user)
+# does newgrp docker work as expected on MacOS? I think this needs to be tested
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
@@ -52,21 +54,86 @@ check-tools() {
 install-tools() {
   check-tools && return
 
-  logger "will install the following tools: jq git kubectl helm"
+  logger "This operation will install the following tools: jq git kubectl helm"
   approve-destructive-operation
 
   os=$(get-os)
-  grep -q "amzn"   <<< ${os} && sudo yum install -y jq git
-  grep -q "ubuntu" <<< ${os} && sudo apt install -y jq git
-  grep -q "darwin" <<< ${os} && brew install js git
+  grep -q "amzn"   <<< ${os} && {
+    sudo yum update -y
+    sudo yum install -y jq git
+  }
+  grep -q "ubuntu" <<< ${os} && {
+    sudo apt update -y
+    sudo apt install -y jq git
+  }
+  grep -q "darwin" <<< ${os} && {
+    brew update
+    brew install js git
+  }
 
   curl -O -s https://s3.us-west-2.amazonaws.com/amazon-eks/1.25.7/2023-03-17/bin/$(uname | tr '[:upper:]' '[:lower:]')/amd64/kubectl
   chmod +x ./kubectl
-  sudo mv ./kubectl /usr/local/bin/
+  sudo mv ./kubectl /usr/bin/
   
   curl -fsSL -o ${temp_dir}/get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
   chmod 700 ${temp_dir}/get_helm.sh
-  ${temp_dir}/get_helm.sh
+  HELM_INSTALL_DIR=/usr/bin ${temp_dir}/get_helm.sh
+}
+
+create-local-k8s-cluster() {
+  logger "This operation will install docker/k3d (as necessary) and create a new k8s cluster on localhost"
+  approve-destructive-operation
+
+  os=$(get-os)
+  grep -q "amzn"   <<< ${os} && {
+    logger "Amazon Linux: installing Docker"
+    sudo yum update -y
+    sudo yum install -y docker
+    sudo usermod -a -G docker ${USER}    
+    sudo systemctl enable docker.service
+    sudo systemctl start docker.service
+    logger "Installing k3d"
+    curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | K3D_INSTALL_DIR=/usr/bin bash
+    logger "creating cluster"
+    newgrp docker << EOD
+    k3d cluster create ${TLSPK_CLUSTER_NAME} -p "80:80@loadbalancer" -p "443:443@loadbalancer" --wait
+    k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
+EOD
+  }
+  grep -q "ubuntu" <<< ${os} && {
+    logger "Ubuntu: installing Docker"
+    sudo apt update -y
+    sudo apt install -y apt-transport-https ca-certificates curl software-properties-common
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    sudo apt update -y
+    apt-cache policy docker-ce
+    sudo apt install -y docker-ce
+    sudo usermod -a -G docker ${USER}    
+    sudo systemctl enable docker.service
+    sudo systemctl start docker.service
+    logger "Installing k3d"
+    curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | K3D_INSTALL_DIR=/usr/bin bash
+    logger "creating cluster"
+    newgrp docker << EOD
+    k3d cluster create ${TLSPK_CLUSTER_NAME} -p "80:80@loadbalancer" -p "443:443@loadbalancer" --wait
+    k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
+EOD
+  }
+  grep -q "darwin" <<< ${os} && {
+    logger "MacOS: Docker Desktop assumed to be installed and running"
+    logger "Installing k3d"
+    curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | K3D_INSTALL_DIR=/usr/bin bash
+    logger "creating cluster"
+    k3d cluster create ${TLSPK_CLUSTER_NAME} -p "80:80@loadbalancer" -p "443:443@loadbalancer" --wait
+    k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
+  }
+
+  logger "awaiting cluster steady state"
+  sleep 5 && kubectl -n kube-system wait --for=condition=Available=True --all deployments --timeout=-1s
+  kubectl -n kube-system wait pod -l k8s-app=metrics-server --for=condition=Ready --timeout=-1s
+
+  show-cluster-status
 }
 
 get-oauth-token() {
@@ -355,6 +422,7 @@ usage() {
   echo "Available Commands:"
   echo "  get-oauth-token            Obtains token for TLSPK_SA_USER_ID/TLSPK_SA_USER_SECRET pair"
   echo "  get-dockerconfig           Obtains Docker-compatible registry config / image pull secret (as used with 'helm upgrade --registry-config')"
+  echo "  create-local-k8s-cluster   Create a new k8s cluster on localhost (uses k3d)"
   echo "  create-unsafe-tls-secrets  Define TLS Secrets in the demo-certs namespace (NOT protected by cert-manager)"
   echo "  discover-tls-secrets       Scan the current cluster for TLS secrets"
   echo "  deploy-agent               Deploys the TLSPK agent component"
@@ -393,7 +461,7 @@ set -u
 unset COMMAND APPROVED
 while [[ $# -gt 0 ]]; do
   case $1 in
-    'usage'|'install-tools'|'get-oauth-token'|'get-dockerconfig'|'create-unsafe-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-safe-tls-secrets'|'check-auth'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
+    'usage'|'install-tools'|'get-oauth-token'|'get-dockerconfig'|'show-cluster-status'|'create-local-k8s-cluster'|'create-unsafe-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-safe-tls-secrets'|'check-auth'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
       COMMAND=$1
       ;;
     '--auto-approve')
