@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 
 # TODO
-# - '--auto-approve' on its own should fail
-# see if I can reduce mktemp use, or use tmp folder which gets cleaned up on EXIT
 # use more constructs like this to reduce code size and variable usage (if ! result=$(get-secret); then echo ${result}; return 126; fi)
 # work out why constructs like result=$(extract-secret-data) in get-dockerconfig cause base64 to blow up (definitely a quotes thing, but tempfiles seem to work OK for now).
 # work on eliminating the "side effect" in get-dockerconfig
-# would like to find a way of creating expired certs on MacOS (openssl -days param is +ve only)
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
 OPERATOR_VERSION_DEFAULT="v0.0.1-alpha.24"
 BASE64_WRAP_SWITCH=$(uname | grep -q Darwin && echo b || echo w)
+OPENSSL_NEGATIVE_DAYS=$(uname | grep -q Darwin && echo || echo -) # MacOS openssl doesn't support -ve days (for simulating expired certs)
 
 : ${DEBUG:="false"}
 
@@ -24,6 +22,7 @@ finally() {
   if [ "$result" != "0" ]; then
     echo "aborting!"
   fi
+  rm -rf ${temp_dir}
   exit $result
 }
 
@@ -31,7 +30,7 @@ check-vars() {
   result=0
   for var in "$@"; do
     if [[ -z "${!var}" ]]; then
-      echo "$var is not set"
+      echo "$var is not set (use export)"
       result=1
     fi
   done
@@ -49,14 +48,13 @@ check-dependencies() {
 }
 
 get-oauth-token() {
-  outfile=$(mktemp)
-  http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${outfile} https://auth.jetstack.io/oauth/token \
+  http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/token.out https://auth.jetstack.io/oauth/token \
     --data "audience=https://preflight.jetstack.io/api/v1" \
     --data "client_id=jmQwDGl86WAevq6K6zZo6hJ4WUvp14yD" \
     --data "grant_type=password" \
     --data "username=${TLSPK_SA_USER_ID}" \
     --data-urlencode "password=${TLSPK_SA_USER_SECRET}")
-  cat ${outfile} && rm ${outfile}
+  cat ${temp_dir}/token.out
   if grep -qv "^2" <<< ${http_code}; then return 1; fi
 }
 
@@ -88,11 +86,10 @@ create-secret() {
 
   oauth_token=$(jq .access_token --raw-output <<< ${oauth_token_json})
   pull_secret_request='[{"id":"","displayName":"'"$(get-secret-name)"'"}]'
-  outfile=$(mktemp)
-  http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${outfile} -X POST https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts \
+  http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/svc_account.out -X POST https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts \
     --header "authorization: Bearer ${oauth_token}" \
     --data "${pull_secret_request}")
-  cat ${outfile} && rm ${outfile}
+  cat ${temp_dir}/svc_account.out
   if grep -qv "^2" <<< ${http_code}; then return 127; fi
 }
 
@@ -128,9 +125,8 @@ extract-secret-data() {
 
 get-dockerconfig()
 {
-  pullsecret_file=$(mktemp)
   set +e
-  extract-secret-data > ${pullsecret_file}
+  extract-secret-data > ${temp_dir}/pull_secret.out
   exit_code=$?
   set -e
   if [ ${exit_code} -ne 0 ]; then
@@ -139,19 +135,18 @@ get-dockerconfig()
   fi
 
   # despite documentation to the contrary, I don't believe "auths:eu.gcr.io:password" is required, so it's omitted
-  dockerconfigjson_file=$(mktemp)
-  cat <<-EOF > ${dockerconfigjson_file}
+  cat <<-EOF > ${temp_dir}/dockerconfig_json.out
   {
     "auths": {
       "eu.gcr.io": {
         "username": "_json_key",
         "email": "auth@jetstack.io",
-        "auth": "$(echo "_json_key:$(cat ${pullsecret_file})" | base64 -${BASE64_WRAP_SWITCH} 0)"
+        "auth": "$(echo "_json_key:$(cat  ${temp_dir}/pull_secret.out)" | base64 -${BASE64_WRAP_SWITCH} 0)"
       }
     }
   }
 EOF
-cat ${dockerconfigjson_file} && rm ${dockerconfigjson_file} && rm ${pullsecret_file}
+cat ${temp_dir}/dockerconfig_json.out
 }
 
 show-cluster-status() {
@@ -171,8 +166,6 @@ approve-destructive-operation() {
 }
 
 create-unsafe-tls-secrets() {
-  temp_dir=$(mktemp -d)
-
   cat <<EOF > ${temp_dir}/ssl.conf
   [ req ]
   default_bits		= 2048
@@ -190,12 +183,11 @@ create-unsafe-tls-secrets() {
   [ alt_names ]
   DNS.1               = kryptonite.elements.com
 EOF
-  openssl genrsa -out ${temp_dir}/key.pem 2048
+  openssl genrsa -out ${temp_dir}/key.pem 2048 # https://gist.github.com/croxton/ebfb5f3ac143cd86542788f972434c96
   openssl req -new -key ${temp_dir}/key.pem -out ${temp_dir}/csr.pem -subj "/CN=kryptonite.elements.com" -reqexts req_ext -config ${temp_dir}/ssl.conf
-  openssl x509 -req -in ${temp_dir}/csr.pem -signkey ${temp_dir}/key.pem -out ${temp_dir}/cert.pem -days 1 -extensions req_ext -extfile ${temp_dir}/ssl.conf
+  openssl x509 -req -in ${temp_dir}/csr.pem -signkey ${temp_dir}/key.pem -out ${temp_dir}/cert.pem -days ${OPENSSL_NEGATIVE_DAYS}1 -extensions req_ext -extfile ${temp_dir}/ssl.conf
   kubectl create namespace demo-certs 2>/dev/null || true
   kubectl -n demo-certs create secret tls kryptonite-elements-com-tls --cert=${temp_dir}/cert.pem --key=${temp_dir}/key.pem
-  rm -rf ${temp_dir}
 }
 
 discover-tls-secrets() {
@@ -300,16 +292,14 @@ create-self-signed-issuer() {
   approve-destructive-operation
 
   logger "creating a self-signed issuer"
-  patchfile=$(mktemp)
-  cat <<EOF > ${patchfile}
+  cat <<EOF > ${temp_dir}/patchfile
   spec:
     issuers:
       - name: self-signed
         clusterScope: true
         selfSigned: {}
 EOF
-  kubectl patch installation jetstack-secure --type merge --patch-file ${patchfile}
-  rm ${patchfile}
+  kubectl patch installation jetstack-secure --type merge --patch-file ${temp_dir}/patchfile
 
   logger "deploy operator components: awaiting steady state"
   sleep 5 # not sure we can "wait" on anything so just give the issuer a moment to appear
@@ -382,6 +372,7 @@ if [ "${DEBUG}" == "true" ]; then
   set -x
 fi
 
+temp_dir=$(mktemp -d)
 check-vars "TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET"
 check-dependencies curl jq kubectl openssl
 derive-org-from-user
@@ -392,7 +383,7 @@ set -u
 unset COMMAND APPROVED
 while [[ $# -gt 0 ]]; do
   case $1 in
-    'usage'|'check-auth'|'get-oauth-token'|'get-dockerconfig'|'create-unsafe-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-safe-tls-secrets'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
+    'usage'|'get-oauth-token'|'get-dockerconfig'|'create-unsafe-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-safe-tls-secrets'|'check-auth'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
       COMMAND=$1
       ;;
     '--auto-approve')
