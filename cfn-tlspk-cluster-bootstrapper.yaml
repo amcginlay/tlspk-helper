@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description:  https://venafi-ecosystem.s3.amazonaws.com/tlspk/cfn-tlspk-cluster-bootstrapper.yaml
+
+Parameters:
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+  InstanceType:
+    Type: String
+    Default: m5.large
+    AllowedValues:
+      - t2.micro
+      - m5.large
+  # TLSPKSAUserId:
+  #   Type: String
+  #   Default: "_"
+  # TLSPKSAUserSecret:
+  #   Type: String
+  #   Default: "_"
+  #   NoEcho: true
+Resources:
+  Jumpbox:
+    Type: AWS::EC2::Instance
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: "PT5M"
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: AmazonSSMRoleForInstancesQuickSetup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+
+            export TLSPK_SA_USER_ID=${TLSPKSAUserId}
+            export TLSPK_SA_USER_SECRET=${TLSPKSAUserSecret}"
+
+            echo "env output as follows"
+            env
+
+            echo "TLSPK_SA_USER_ID=${TLSPK_SA_USER_ID}"
+            echo "TLSPK_SA_USER_SECRET=${TLSPK_SA_USER_SECRET}"
+
+            # su ec2-user << EOF
+            # cd
+            # bucket_name=venafi-ecosystem-devenv
+            # export TLSPK_SA_USER_ID TLSPK_SA_USER_SECRET
+            # curl -fsSL -o tlspk-helper.sh https://${bucket_name}.s3.amazonaws.com/tlspk/tlspk-helper.sh && chmod 700 tlspk-helper.sh
+            # ./tlspk-helper.sh install-tools --auto-approve
+            # EOF
+            
+            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource Jumpbox --region ${AWS::Region}
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref AWS::StackName, !Ref AWS::Region]]
+
+Outputs:
+  JumpboxInstanceId:
+    Value: !Ref Jumpbox
+    Description: ID of the publicly accessible EC2 instance
