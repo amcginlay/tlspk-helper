@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description:  https://venafi-ecosystem.s3.amazonaws.com/tlspk/cfn-tlspk-cluster-bootstrapper.yaml
+Description: https://venafi-ecosystem.s3.amazonaws.com/tlspk/cfn-tlspk-cluster-bootstrapper.yaml
 
 Parameters:
   LatestAmiId:
@@ -11,20 +11,18 @@ Parameters:
     AllowedValues:
       - t2.micro
       - m5.large
-  # TLSPKSAUserId:
-  #   Type: String
-  #   Default: "_"
-  # TLSPKSAUserSecret:
-  #   Type: String
-  #   Default: "_"
-  #   NoEcho: true
+  TLSPKSAUserId:
+    Type: String
+  TLSPKSAUserSecret:
+    Type: String
+    NoEcho: true
 Resources:
   Jumpbox:
     Type: AWS::EC2::Instance
     CreationPolicy:
       ResourceSignal:
         Count: 1
-        Timeout: "PT5M"
+        Timeout: "PT10M"
     Properties:
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref InstanceType
@@ -37,25 +35,23 @@ Resources:
         Fn::Base64:
           !Sub |
             #!/bin/bash
+            su ec2-user << EOF
+              cd
+              export TLSPK_SA_USER_ID=${TLSPKSAUserId}
+              export TLSPK_SA_USER_SECRET="'"${TLSPKSAUserSecret}"'"
+              curl -fsSL -o tlspk-helper.sh https://venafi-ecosystem.s3.amazonaws.com/tlspk/tlspk-helper.sh && chmod 700 tlspk-helper.sh
+              
+              ./tlspk-helper.sh install-tools              --auto-approve
+              ./tlspk-helper.sh create-local-k8s-cluster   --auto-approve
+              ./tlspk-helper.sh create-unsafe-tls-secrets  --auto-approve
+              ./tlspk-helper.sh deploy-agent               --auto-approve
+              ./tlspk-helper.sh install-operator           --auto-approve
+              ./tlspk-helper.sh deploy-operator-components --auto-approve
+              ./tlspk-helper.sh create-self-signed-issuer  --auto-approve
+              ./tlspk-helper.sh create-safe-tls-secrets    --auto-approve
 
-            export TLSPK_SA_USER_ID=${TLSPKSAUserId}
-            export TLSPK_SA_USER_SECRET=${TLSPKSAUserSecret}"
-
-            echo "env output as follows"
-            env
-
-            echo "TLSPK_SA_USER_ID=${TLSPK_SA_USER_ID}"
-            echo "TLSPK_SA_USER_SECRET=${TLSPK_SA_USER_SECRET}"
-
-            # su ec2-user << EOF
-            # cd
-            # bucket_name=venafi-ecosystem-devenv
-            # export TLSPK_SA_USER_ID TLSPK_SA_USER_SECRET
-            # curl -fsSL -o tlspk-helper.sh https://${bucket_name}.s3.amazonaws.com/tlspk/tlspk-helper.sh && chmod 700 tlspk-helper.sh
-            # ./tlspk-helper.sh install-tools --auto-approve
-            # EOF
-            
-            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource Jumpbox --region ${AWS::Region}
+              /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource Jumpbox --region ${AWS::Region}
+            EOF
       Tags:
         - Key: Name
           Value: !Join ["-", [!Ref AWS::StackName, !Ref AWS::Region]]
