@@ -5,6 +5,9 @@
 # work on eliminating the ugly "side effect" in get-dockerconfig
 # if I'm on Amazon Linux I think we should fail unless whoami is ec2-user or ubuntu (ssm-user will need to sudo su ec2-user)
 # does newgrp docker work as expected on MacOS? I think this needs to be tested
+# mimic range of cert errors/warninghs as per demo cluster (see org/pedantic-wiles)
+# One cluster per VM? (avoids 80/443 port colission)
+# Make install-tools the default method.
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
@@ -78,6 +81,8 @@ install-tools() {
   curl -fsSL -o ${temp_dir}/get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
   chmod 700 ${temp_dir}/get_helm.sh
   HELM_INSTALL_DIR=/usr/bin ${temp_dir}/get_helm.sh
+
+  logger "Helper script is now ready to use"
 }
 
 create-local-k8s-cluster() {
@@ -452,10 +457,12 @@ fi
 temp_dir=$(mktemp -d)
 if ! os=$(get-os); then logger ${os}; exit 1; fi
 check-vars "TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET"
-install-tools
 derive-org-from-user
 
-if [[ $# -eq 0 ]]; then set "usage"; fi # fake arg if none
+if [[ $# -eq 0 ]]; then # fake arg if none
+  check-tools && set "usage" || set "install-tools";
+fi
+
 INPUT_ARGUMENTS="${@}"
 set -u
 unset COMMAND APPROVED
