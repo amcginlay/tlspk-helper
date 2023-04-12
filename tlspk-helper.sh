@@ -135,8 +135,8 @@ EOD
   }
 
   logger "awaiting cluster steady state"
-  sleep 5 && kubectl -n kube-system wait --for=condition=Available=True --all deployments --timeout=-1s
-  kubectl -n kube-system wait pod -l k8s-app=metrics-server --for=condition=Ready --timeout=-1s
+  sleep 5 && kubectl -n kube-system wait --for=condition=Available=True --all deployments --timeout=300s
+  kubectl -n kube-system wait pod -l k8s-app=metrics-server --for=condition=Ready --timeout=300s
 
   show-cluster-status
 }
@@ -310,7 +310,7 @@ deploy-agent() {
     kubectl apply -f -
   
   logger "deploying TLSPK agent: awaiting steady state"
-  sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=-1s
+  sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=300s
   logger "cluster will appear in TLSPK as ${tlkps_cluster_name_adj}"
 }
 
@@ -334,7 +334,7 @@ install-operator() {
     --wait
 
   logger "installing the operator: awaiting steady state"
-  sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=-1s
+  sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=300s
 }
 
 deploy-operator-components() {
@@ -361,9 +361,9 @@ deploy-operator-components() {
 EOF
 
   logger "deploy operator components: awaiting steady state"
-  sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=-1s
-  kubectl -n jetstack-secure wait pod -l app=cert-manager --for=condition=Ready --timeout=-1s
-  kubectl -n jetstack-secure wait pod -l app=webhook --for=condition=Ready --timeout=-1s
+  sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=300s
+  kubectl -n jetstack-secure wait pod -l app=cert-manager --for=condition=Ready --timeout=300s
+  kubectl -n jetstack-secure wait pod -l app=webhook --for=condition=Ready --timeout=300s
 }
 
 create-self-signed-issuer() {
