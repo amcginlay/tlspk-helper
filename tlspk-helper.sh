@@ -163,6 +163,13 @@ derive-org-from-user() {
   TLSPK_ORG=$(cut -d'@' -f2- <<< ${TLSPK_SA_USER_ID} | cut -d'.' -f1)
 }
 
+unpatch-user-secret() {
+  # HACK! never found a proper fix for preserving '$' from CloudFormation preprocessing
+  # use sed 's/\$/_DOLLAR_/g' in the UserData to allow exported vars to pass thru
+  # this function is the counterpart which reverses that hack
+  TLSPK_SA_USER_SECRET=$(sed 's/_DOLLAR_/\$/g' <<< ${TLSPK_SA_USER_SECRET})
+}
+
 get-secret-name() {
   echo "ips-$(hostname)-${TLSPK_SA_USER_ID}"
 }
@@ -458,6 +465,7 @@ temp_dir=$(mktemp -d)
 if ! os=$(get-os); then logger ${os}; exit 1; fi
 check-vars "TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET"
 derive-org-from-user
+unpatch-user-secret
 
 if [[ $# -eq 0 ]]; then # fake arg if none
   check-tools && set "usage" || set "install-tools";
