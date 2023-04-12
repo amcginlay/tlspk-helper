@@ -37,6 +37,7 @@ Resources:
             #!/bin/bash
             su ec2-user << EOF
               cd
+              set -e
               export TLSPK_SA_USER_ID=${TLSPKSAUserId}
               export TLSPK_SA_USER_SECRET='${TLSPKSAUserSecret}'
               curl -fsSL -o tlspk-helper.sh https://venafi-ecosystem.s3.amazonaws.com/tlspk/tlspk-helper.sh && chmod 700 tlspk-helper.sh
