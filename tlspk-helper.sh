@@ -332,16 +332,18 @@ install-operator() {
   show-cluster-status
   approve-destructive-operation
 
+  get-dockerconfig > ${temp_dir}/dockerconfig.json
+  
   logger "replicating secret into cluster"
   kubectl create namespace jetstack-secure 2>/dev/null || true
   kubectl -n jetstack-secure delete secret jse-gcr-creds >/dev/null 2>&1 || true
-  kubectl -n jetstack-secure create secret docker-registry jse-gcr-creds --from-file .dockerconfigjson=<(get-dockerconfig)
+  kubectl -n jetstack-secure create secret docker-registry jse-gcr-creds --from-file .dockerconfigjson=${temp_dir}/dockerconfig.json
 
   logger "installing the operator"
   helm -n jetstack-secure upgrade -i js-operator \
     oci://eu.gcr.io/jetstack-secure-enterprise/charts/js-operator   \
     --version ${OPERATOR_VERSION} \
-    --registry-config <(get-dockerconfig) \
+    --registry-config ${temp_dir}/dockerconfig.json \
     --set images.secret.enabled=true   \
     --set images.secret.name=jse-gcr-creds \
     --wait
