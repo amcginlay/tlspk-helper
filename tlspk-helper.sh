@@ -509,3 +509,4 @@ else
 fi
 
 ${COMMAND}
+
