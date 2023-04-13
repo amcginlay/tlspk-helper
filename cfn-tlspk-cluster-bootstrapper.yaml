@@ -16,9 +16,11 @@ Parameters:
     Default: venafi-ecosystem
   TLSPKSAUserId:
     Type: String
+    AllowedPattern : '.+'
   TLSPKSAUserSecret:
     Type: String
     NoEcho: true
+    AllowedPattern : '.+'
 Resources:
   Jumpbox:
     Type: AWS::EC2::Instance
