@@ -8,6 +8,7 @@
 # mimic range of cert errors/warninghs as per demo cluster (see org/pedantic-wiles)
 # One cluster per VM? (avoids 80/443 port colission)
 # when counting args, ignore anything beginning with "--"
+# support multi-cluster (don't try to take ports 80/443 it unavailble)
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
@@ -24,7 +25,7 @@ logger() {
 finally() {
   exit_code=$?
   if [ "$exit_code" != "0" ]; then
-    echo "aborting!"
+    logger "aborting!"
   fi
   rm -rf ${temp_dir}
   exit $exit_code
@@ -310,7 +311,9 @@ deploy-agent() {
 
   logger "deploying TLSPK agent"
 
-  json_creds='{"user_id": "'"${TLSPK_SA_USER_ID}"'","user_secret": "'"$(echo ${TLSPK_SA_USER_SECRET} | sed 's/"/\\"/g')"'"}'
+  escaped_user_secret=$(echo ${TLSPK_SA_USER_SECRET} | sed 's/\\/\\\\/g') # 1) fix forward-slashes 
+  escaped_user_secret=$(echo ${escaped_user_secret} | sed 's/"/\\"/g')    # 2) fix double-quotes
+  json_creds='{"user_id": "'"${TLSPK_SA_USER_ID}"'","user_secret": "'"${escaped_user_secret}"'"}'
   json_creds_b64=$(echo ${json_creds} | base64 -${BASE64_WRAP_SWITCH} 0)
   tlkps_cluster_name_adj=$(tr "-" "_" <<< ${TLSPK_CLUSTER_NAME})
   curl -sL https://raw.githubusercontent.com/jetstack/jsctl/main/internal/cluster/templates/agent.yaml | \
