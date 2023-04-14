@@ -31,7 +31,7 @@ Resources:
           FromPort: 22
           ToPort: 22
           CidrIp: 0.0.0.0/0
-  Jumpbox:
+  K8sCluster:
     Type: AWS::EC2::Instance
     CreationPolicy:
       ResourceSignal:
@@ -68,13 +68,8 @@ Resources:
               ./tlspk-helper.sh create-self-signed-issuer  --auto-approve
               ./tlspk-helper.sh create-safe-tls-secrets    --auto-approve
 
-              /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource Jumpbox --region ${AWS::Region}
+              /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource K8sCluster --region ${AWS::Region}
             EOF
       Tags:
         - Key: Name
           Value: !Join ["-", [!Ref AWS::StackName, !Ref AWS::Region]]
-
-Outputs:
-  JumpboxInstanceId:
-    Value: !Ref Jumpbox
-    Description: ID of the publicly accessible EC2 instance
