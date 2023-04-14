@@ -483,15 +483,15 @@ while [[ $# -gt 0 ]]; do
       COMMAND=$1
       ;;
     '--auto-approve')
-      APPROVED="y"
+      : ${APPROVED:="y"}
       ;;
     '--operator-version')
       shift
-      OPERATOR_VERSION="${1}"
+      : ${OPERATOR_VERSION:="${1}"}
       ;;
     '--cluster-name')
       shift
-      TLSPK_CLUSTER_NAME="${1}"
+      : ${TLSPK_CLUSTER_NAME:="${1}"}
       ;;
     *) 
       echo "Unrecognised command ${INPUT_ARGUMENTS}"
@@ -507,7 +507,7 @@ set +u
 
 if kubectl config current-context >/dev/null 2>&1; then
   : ${TLSPK_CLUSTER_NAME:=$(kubectl config current-context | tr '@' '.' | cut -c-21)-$(date +"%y%m%d%H%M")}
-else  
+else
   : ${TLSPK_CLUSTER_NAME:=k8s-$(date +"%y%m%d%H%M")}
 fi
 
