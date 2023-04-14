@@ -26,4 +26,4 @@ jobs:
       run: |
         aws s3 cp cfn-tlspk-cluster-bootstrapper.yaml s3://venafi-ecosystem/tlspk/
         aws s3 cp tlspk-helper.sh                     s3://venafi-ecosystem/tlspk/
-        aws s3 cp tlspk-helper.README.txt             s3://${bucket}/tlspk/
+        aws s3 cp tlspk-helper.README.txt             s3://venafi-ecosystem/tlspk/
