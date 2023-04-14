@@ -22,6 +22,15 @@ Parameters:
     NoEcho: true
     AllowedPattern : '.+'
 Resources:
+  SSHSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable SSH access
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
   Jumpbox:
     Type: AWS::EC2::Instance
     CreationPolicy:
@@ -32,6 +41,8 @@ Resources:
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref InstanceType
       IamInstanceProfile: AmazonSSMRoleForInstancesQuickSetup
+      SecurityGroupIds:
+        - !Ref SSHSecurityGroup # enable EC2 Instance Connect
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
@@ -39,14 +50,14 @@ Resources:
       UserData:
         Fn::Base64:
           !Sub |
-            #!/bin/bash
+            #!/usr/bin/env bash
             su ec2-user << EOF
               cd
               set -e
               export TLSPK_SA_USER_ID=${TLSPKSAUserId}
               export TLSPK_SA_USER_SECRET='$(sed 's/\$/_DOLLAR_/g' <<< '${TLSPKSAUserSecret}')'
               export TLSPK_CLUSTER_NAME=${AWS::StackName}-$(date +"%y%m%d%H%M") # date suffixed to ensure TLSPK doesn't consider it a dupe
-              curl -fsSL -o tlspk-helper.sh https://${EcosystemBucket}.s3.amazonaws.com/tlspk/tlspk-helper.sh && chmod 700 tlspk-helper.sh
+              curl -fsSLO https://${EcosystemBucket}.s3.amazonaws.com/tlspk/tlspk-helper.sh && chmod 700 tlspk-helper.sh
               
               ./tlspk-helper.sh install-tools              --auto-approve
               ./tlspk-helper.sh create-local-k8s-cluster   --auto-approve
