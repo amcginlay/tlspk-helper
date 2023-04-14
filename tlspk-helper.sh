@@ -24,7 +24,7 @@ logger() {
 
 finally() {
   exit_code=$?
-  if [ "$exit_code" != "0" ]; then
+  if [[ "$exit_code" != "0" ]]; then
     logger "aborting!"
   fi
   rm -rf ${temp_dir}
@@ -39,7 +39,7 @@ check-vars() {
       missing_vars+=("$var")
     fi
   done
-  if [ ${#missing_vars[@]} -ne 0 ]; then
+  if [[ ${#missing_vars[@]} -ne 0 ]]; then
     logger "the following REQUIRED environment variables are missing: ${missing_vars[@]}"
     return 1
   fi
@@ -202,7 +202,7 @@ get-secret-filename() {
 
 get-secret() {
   secret_filename=$(get-secret-filename)
-  if ! [ -f ${secret_filename} ]; then
+  if ! [[ -f ${secret_filename} ]]; then
     mkdir -p $(get-config-dir)
     set +e
     if ! secret=$(create-secret); then echo ${secret}; return 1; fi
@@ -243,7 +243,7 @@ show-cluster-status() {
 }
 
 approve-destructive-operation() {
-  if [ -z ${APPROVED+x} ]; then
+  if [[ -z ${APPROVED+x} ]]; then
     read -p "Are you sure? [y/N] " APPROVED
   fi
   if grep -qv "^y\|Y" <<< ${APPROVED}; then
@@ -465,7 +465,7 @@ usage() {
 trap "finally" EXIT
 set -e
 
-if [ "${DEBUG}" == "true" ]; then
+if [[ "${DEBUG}" == "true" ]]; then
   set -x
 fi
 
