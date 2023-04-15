@@ -3,13 +3,12 @@
 # TODO
 # work out why constructs like result=$(extract-secret-data) in get-dockerconfig cause base64 to blow up (definitely a quotes thing, but tempfiles seem to work OK for now).
 # work on eliminating the ugly "side effect" in get-dockerconfig
-# if I'm on Amazon Linux I think we should fail unless whoami is ec2-user or ubuntu (ssm-user will need to sudo su ec2-user)
-# does newgrp docker work as expected on MacOS? I think this needs to be tested
 # mimic range of cert errors/warninghs as per demo cluster (see org/pedantic-wiles)
-# when counting args, ignore anything beginning with "--"
 # support multi-cluster (don't try to take ports 80/443 it unavailble)
 # test if docker daemon is running before attempting to create cluster
 # think about splitting logger into 2 commands info (>1) and error (>2)
+# make the requirement for env vars more selective (e.g. ./tlspk-helper.sh discover-tls-secrets, shouldn't need them)
+# selective reintroduction of local function variables
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
@@ -107,12 +106,12 @@ EOF
           HELM_INSTALL_DIR=/usr/bin ${temp_dir}/get_helm.sh
           ;;
         *) 
-          echo "Unrecognised tool: ${tool}"
+          logger "Unrecognised tool: ${tool}"
           return 1
           ;;
       esac
-      logger "Tools successfully installed"
     done
+    logger "Required tools successfully installed"
   fi
 }
 
@@ -313,7 +312,7 @@ discover-tls-secrets() {
 check-undeployed() {
   if kubectl get namespace ${1} >/dev/null 2>&1; then
     if kubectl -n ${1} rollout status deployment ${2} >/dev/null 2>&1; then
-      echo "${1}/${2} is already deployed"
+      logger "${1}/${2} is already deployed"
       return 1
     fi
   fi
@@ -326,7 +325,7 @@ check-deployed() {
       return 0
     fi
   fi
-  echo "${1}/${2} is not deployed"
+  logger "${1}/${2} is not deployed"
   return 1
 }
 
@@ -521,7 +520,7 @@ while [[ $# -gt 0 ]]; do
       : ${TLSPK_CLUSTER_NAME:="${1}"}
       ;;
     *) 
-      echo "Unrecognised command ${INPUT_ARGUMENTS}"
+      logger "Unrecognised command ${INPUT_ARGUMENTS}"
       usage
       exit 1
       ;;
