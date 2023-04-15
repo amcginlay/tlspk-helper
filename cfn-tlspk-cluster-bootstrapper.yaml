@@ -52,13 +52,19 @@ Resources:
           !Sub |
             #!/usr/bin/env bash
             su ec2-user << EOF
-              cd
               set -e
+              finally() {
+                /opt/aws/bin/cfn-signal -e 1 --stack ${AWS::StackName} --resource K8sCluster --region ${AWS::Region}
+                exit 1
+              }
+              trap "finally" ERR
+
+              cd
               export TLSPK_SA_USER_ID=${TLSPKSAUserId}
               export TLSPK_SA_USER_SECRET='$(sed 's/\$/_DOLLAR_/g' <<< '${TLSPKSAUserSecret}')'
               export TLSPK_CLUSTER_NAME=${AWS::StackName}-$(date +"%y%m%d%H%M") # date suffixed to ensure TLSPK doesn't consider it a dupe
               curl -fsSLO https://${EcosystemBucket}.s3.amazonaws.com/tlspk/tlspk-helper.sh && chmod 700 tlspk-helper.sh
-              
+
               ./tlspk-helper.sh install-tools              --auto-approve
               ./tlspk-helper.sh create-local-k8s-cluster   --auto-approve
               ./tlspk-helper.sh create-unsafe-tls-secrets  --auto-approve
@@ -68,7 +74,7 @@ Resources:
               ./tlspk-helper.sh create-self-signed-issuer  --auto-approve
               ./tlspk-helper.sh create-safe-tls-secrets    --auto-approve
 
-              /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource K8sCluster --region ${AWS::Region}
+              /opt/aws/bin/cfn-signal -e 0 --stack ${AWS::StackName} --resource K8sCluster --region ${AWS::Region}
             EOF
       Tags:
         - Key: Name
