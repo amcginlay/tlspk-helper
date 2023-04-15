@@ -65,7 +65,7 @@ Resources:
               export TLSPK_CLUSTER_NAME=${AWS::StackName}-$(date +"%y%m%d%H%M") # date suffixed to ensure TLSPK doesn't consider it a dupe
               curl -fsSLO https://${EcosystemBucket}.s3.amazonaws.com/tlspk/tlspk-helper.sh && chmod 700 tlspk-helper.sh
 
-              ./tlspk-helper.sh install-tools              --auto-approve
+              ./tlspk-helper.sh install-dependencies       --auto-approve
               ./tlspk-helper.sh create-local-k8s-cluster   --auto-approve
               ./tlspk-helper.sh create-unsafe-tls-secrets  --auto-approve
               ./tlspk-helper.sh deploy-agent               --auto-approve

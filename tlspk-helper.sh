@@ -5,7 +5,6 @@
 # work on eliminating the ugly "side effect" in get-dockerconfig
 # mimic range of cert errors/warninghs as per demo cluster (see org/pedantic-wiles)
 # support multi-cluster (don't try to take ports 80/443 it unavailble)
-# test if docker daemon is running before attempting to create cluster
 # think about splitting logger into 2 commands info (>1) and error (>2)
 # make the requirement for env vars more selective (e.g. ./tlspk-helper.sh discover-tls-secrets, shouldn't need them)
 # selective reintroduction of local function variables
@@ -60,34 +59,34 @@ get-pm() {
   logger "No package manager support for ${os}" && return 1
 }
 
-get-missing-tools() {
-  required_tools=("jq" "git" "kubectl" "helm")
-  missing_tools=()
-  for tool in "${required_tools[@]}"; do
-    if ! command -v "$tool" &> /dev/null; then
-      missing_tools+=("$tool")
+get-missing-packages() {
+  required_packages=("$@")
+  missing_packages=()
+  for package in "${required_packages[@]}"; do
+    if ! command -v "$package" &> /dev/null; then
+      missing_packages+=("$package")
     fi
   done
-  echo ${missing_tools[*]}
+  echo ${missing_packages[*]}
 }
 
-install-tools() {
-  missing_tools=($(get-missing-tools))
-  if [[ ${#missing_tools[@]} -ne 0 ]]; then
-    logger "The following required tools are missing: ${missing_tools[*]}"
+install-dependencies() {
+  missing_packages=($(get-missing-packages "jq" "git" "kubectl" "helm" "docker" "k3d"))
+  if [[ ${#missing_packages[@]} -ne 0 ]]; then
+    logger "The following required packages are missing: ${missing_packages[*]}"
     os=$(get-os)
     if [[ "$os" != "amzn" && "$os" != "ubuntu" ]]; then
-      logger "Manual installation of these tools is required for your OS"
+      logger "Manual installation of these packages is required for your OS"
       return 1
     fi
-    logger "This operation will install the missing tools"
+    logger "This operation will install the missing packages"
     approve-destructive-operation
     pm=$(get-pm)
-    for tool in "${missing_tools[@]}"; do
-      case ${tool} in
+    for package in "${missing_packages[@]}"; do
+      case ${package} in
         'jq'|'git')
           sudo ${pm} update -y # optimize this!
-          sudo ${pm} install ${tool} -y
+          sudo ${pm} install ${package} -y
           ;;
         'kubectl')
           curl -O -s https://s3.us-west-2.amazonaws.com/amazon-eks/1.25.7/2023-03-17/bin/$(uname | tr '[:upper:]' '[:lower:]')/amd64/kubectl
@@ -105,65 +104,54 @@ EOF
           chmod 700 ${temp_dir}/get_helm.sh
           HELM_INSTALL_DIR=/usr/bin ${temp_dir}/get_helm.sh
           ;;
+        'docker')
+          if [[ "$(systemctl is-active docker)" == "unknown" ]]; then # needs installing
+            sudo ${pm} update -y
+            if [[ "$os" == "amzn" ]]; then
+              sudo ${pm} install -y docker
+              sudo usermod -a -G docker ${USER}
+            else # ubuntu
+              sudo ${pm} install -y apt-transport-https ca-certificates curl software-properties-common
+              curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+              echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+              sudo ${pm} update -y # for new sources
+              apt-cache policy docker-ce
+              sudo ${pm} install -y docker-ce
+              sudo usermod -a -G docker ${USER}    
+            fi
+          fi 
+          ;;
+        'k3d')
+          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | K3D_INSTALL_DIR=/usr/bin bash
+          ;;
         *) 
-          logger "Unrecognised tool: ${tool}"
+          logger "Unrecognised package: ${package}"
           return 1
           ;;
       esac
     done
-    logger "Required tools successfully installed"
+    logger "Required packages successfully installed"
   fi
 }
 
 create-local-k8s-cluster() {
-  logger "This operation will install docker/k3d (as necessary) and create a new k8s cluster on localhost"
-  approve-destructive-operation
+  if [[ "$(systemctl is-active docker)" != "active" ]]; then # needs starting
+    os=$(get-os)
+    if [[ "$os" != "amzn" && "$os" != "ubuntu" ]]; then
+      logger "The Docker daemon needs to be manually started for your OS"
+      return 1
+    fi
 
-  os=$(get-os)
-  grep -q "amzn"   <<< ${os} && {
-    logger "Amazon Linux: installing Docker"
-    sudo yum update -y
-    sudo yum install -y docker
-    sudo usermod -a -G docker ${USER}    
+    logger "Starting Docker service"
     sudo systemctl enable docker.service
     sudo systemctl start docker.service
-    logger "Installing k3d"
-    curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | K3D_INSTALL_DIR=/usr/bin bash
-    logger "creating cluster"
-    newgrp docker << EOD
-    k3d cluster create ${TLSPK_CLUSTER_NAME} -p "80:80@loadbalancer" -p "443:443@loadbalancer" --wait
-    k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
-EOD
-  }
-  grep -q "ubuntu" <<< ${os} && {
-    logger "Ubuntu: installing Docker"
-    sudo apt update -y
-    sudo apt install -y apt-transport-https ca-certificates curl software-properties-common
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-    sudo apt update -y
-    apt-cache policy docker-ce
-    sudo apt install -y docker-ce
-    sudo usermod -a -G docker ${USER}    
-    sudo systemctl enable docker.service
-    sudo systemctl start docker.service
-    logger "Installing k3d"
-    curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | K3D_INSTALL_DIR=/usr/bin bash
-    logger "creating cluster"
-    newgrp docker << EOD
-    k3d cluster create ${TLSPK_CLUSTER_NAME} -p "80:80@loadbalancer" -p "443:443@loadbalancer" --wait
-    k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
-EOD
-  }
-  grep -q "darwin" <<< ${os} && {
-    logger "MacOS: Docker Desktop assumed to be installed and running"
-    logger "Installing k3d"
-    curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | K3D_INSTALL_DIR=/usr/bin bash
-    logger "creating cluster"
-    k3d cluster create ${TLSPK_CLUSTER_NAME} -p "80:80@loadbalancer" -p "443:443@loadbalancer" --wait
-    k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
-  }
+  fi
 
+  logger "Creating a new Kubernetes cluster using k3d on localhost"
+  newgrp docker << EOD
+  k3d cluster create ${TLSPK_CLUSTER_NAME} -p "80:80@loadbalancer" -p "443:443@loadbalancer" --wait
+  k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
+EOD
   logger "awaiting cluster steady state"
   sleep 5 && kubectl -n kube-system wait --for=condition=Available=True --all deployments --timeout=300s
   kubectl -n kube-system wait pod -l k8s-app=metrics-server --for=condition=Ready --timeout=300s
@@ -470,6 +458,7 @@ usage() {
   echo "  TLSPK_SA_USER_SECRET       User Secret of a TLSPK service account (use single-quotes to preserve control chars!)"
   echo
   echo "Available Commands:"
+  echo "  install-dependencies       Installs ALL the dependencies required by commands in this script (jq git kubectl helm docker k3d) "
   echo "  get-oauth-token            Obtains token for TLSPK_SA_USER_ID/TLSPK_SA_USER_SECRET pair"
   echo "  get-dockerconfig           Obtains Docker-compatible registry config / image pull secret (as used with 'helm upgrade --registry-config')"
   echo "  create-local-k8s-cluster   Create a new k8s cluster on localhost (uses k3d)"
@@ -505,7 +494,7 @@ set -u
 unset COMMAND APPROVED
 while [[ $# -gt 0 ]]; do
   case $1 in
-    'usage'|'install-tools'|'get-oauth-token'|'get-dockerconfig'|'show-cluster-status'|'create-local-k8s-cluster'|'create-unsafe-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-safe-tls-secrets'|'check-auth'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
+    'usage'|'install-dependencies'|'get-oauth-token'|'get-dockerconfig'|'show-cluster-status'|'create-local-k8s-cluster'|'create-unsafe-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-safe-tls-secrets'|'check-auth'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
       COMMAND=$1
       ;;
     '--auto-approve')
@@ -538,7 +527,6 @@ else
 fi
 
 if ! [[ "${COMMAND}" == "usage" ]]; then
-  install-tools
   check-vars
   derive-org-from-user
   unpatch-user-secret
