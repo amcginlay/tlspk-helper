@@ -56,8 +56,8 @@ get-os() {
 
 get-pm() {
   os=$(get-os)
-  [[ "${os}" == "amzn" ]]   && echo "sudo yum" && return
-  [[ "${os}" == "ubuntu" ]] && echo "sudo apt" && return
+  [[ "${os}" == "amzn" ]]   && echo "yum" && return
+  [[ "${os}" == "ubuntu" ]] && echo "apt" && return
   logger "No package manager support for ${os}" && return 1
 }
 
@@ -76,20 +76,19 @@ install-tools() {
   missing_tools=($(get-missing-tools))
   if [[ ${#missing_tools[@]} -ne 0 ]]; then
     logger "The following required tools are missing: ${missing_tools[*]}"
-    os=$(get-os); 
-    if [[ "${os}" == "macos" ]]; then
-      logger "MacOS users are required to install these tools manually"
+    os=$(get-os)
+    if [[ "$os" != "amzn" && "$os" != "ubuntu" ]]; then
+      logger "Manual installation of these tools is required for your OS"
       return 1
     fi
-
     logger "This operation will install the missing tools"
     approve-destructive-operation
     pm=$(get-pm)
     for tool in "${missing_tools[@]}"; do
       case ${tool} in
         'jq'|'git')
-          ${pm} update -y # optimize this!
-          ${pm} install ${tool} -y
+          sudo ${pm} update -y # optimize this!
+          sudo ${pm} install ${tool} -y
           ;;
         'kubectl')
           curl -O -s https://s3.us-west-2.amazonaws.com/amazon-eks/1.25.7/2023-03-17/bin/$(uname | tr '[:upper:]' '[:lower:]')/amd64/kubectl
