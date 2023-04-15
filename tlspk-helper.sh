@@ -6,9 +6,10 @@
 # if I'm on Amazon Linux I think we should fail unless whoami is ec2-user or ubuntu (ssm-user will need to sudo su ec2-user)
 # does newgrp docker work as expected on MacOS? I think this needs to be tested
 # mimic range of cert errors/warninghs as per demo cluster (see org/pedantic-wiles)
-# One cluster per VM? (avoids 80/443 port colission)
 # when counting args, ignore anything beginning with "--"
 # support multi-cluster (don't try to take ports 80/443 it unavailble)
+# test if docker daemon is running before attempting to create cluster
+# think about splitting logger into 2 commands info (>1) and error (>2)
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
@@ -32,61 +33,88 @@ finally() {
 }
 
 check-vars() {
-  set "TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET"
+  required_vars=("TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET")
   missing_vars=()
-  for var in "$@"; do
+  for var in "${required_vars[@]}"; do
     if [[ -z "${!var}" ]]; then
       missing_vars+=("$var")
     fi
   done
   if [[ ${#missing_vars[@]} -ne 0 ]]; then
-    logger "the following REQUIRED environment variables are missing: ${missing_vars[@]}"
+    logger "the following REQUIRED environment variables are missing: ${missing_vars[*]}"
     return 1
   fi
 }
 
 get-os() {
-  result=$(uname -a)
-  grep -q "amzn" <<< ${result} && echo "amzn" && return
-  grep -q "Ubuntu" <<< ${result} && echo "ubuntu" && return
-  grep -q "Darwin" <<< ${result} && echo "darwin" && return
-  echo "Unsupported OS"
-  return 1
+  uname_result=$(uname -a)
+  grep -q "amzn" <<< ${uname_result}   && echo "amzn" && return
+  grep -q "Ubuntu" <<< ${uname_result} && echo "ubuntu" && return
+  grep -q "Darwin" <<< ${uname_result} && echo "macos" && return
+  logger "Unsupported OS" && return 1
 }
 
-check-tools() {
-  which jq git kubectl helm > /dev/null 2>&1 && return
+get-pm() {
+  os=$(get-os)
+  [[ "${os}" == "amzn" ]]   && echo "sudo yum" && return
+  [[ "${os}" == "ubuntu" ]] && echo "sudo apt" && return
+  logger "No package manager support for ${os}" && return 1
+}
+
+get-missing-tools() {
+  required_tools=("jq" "git" "kubectl" "helm")
+  missing_tools=()
+  for tool in "${required_tools[@]}"; do
+    if ! command -v "$tool" &> /dev/null; then
+      missing_tools+=("$tool")
+    fi
+  done
+  echo ${missing_tools[*]}
 }
 
 install-tools() {
-  check-tools && return
+  missing_tools=($(get-missing-tools))
+  if [[ ${#missing_tools[@]} -ne 0 ]]; then
+    logger "The following required tools are missing: ${missing_tools[*]}"
+    os=$(get-os); 
+    if [[ "${os}" == "macos" ]]; then
+      logger "MacOS users are required to install these tools manually"
+      return 1
+    fi
 
-  logger "This operation will install the following tools: jq git kubectl helm"
-  approve-destructive-operation
-
-  os=$(get-os)
-  grep -q "amzn"   <<< ${os} && {
-    sudo yum update -y
-    sudo yum install -y jq git
-  }
-  grep -q "ubuntu" <<< ${os} && {
-    sudo apt update -y
-    sudo apt install -y jq git
-  }
-  grep -q "darwin" <<< ${os} && {
-    brew update
-    brew install js git
-  }
-
-  curl -O -s https://s3.us-west-2.amazonaws.com/amazon-eks/1.25.7/2023-03-17/bin/$(uname | tr '[:upper:]' '[:lower:]')/amd64/kubectl
-  chmod +x ./kubectl
-  sudo mv ./kubectl /usr/bin/
-  
-  curl -fsSL -o ${temp_dir}/get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-  chmod 700 ${temp_dir}/get_helm.sh
-  HELM_INSTALL_DIR=/usr/bin ${temp_dir}/get_helm.sh
-
-  logger "Tools successfully installed"
+    logger "This operation will install the missing tools"
+    approve-destructive-operation
+    pm=$(get-pm)
+    for tool in "${missing_tools[@]}"; do
+      case ${tool} in
+        'jq'|'git')
+          ${pm} update -y # optimize this!
+          ${pm} install ${tool} -y
+          ;;
+        'kubectl')
+          curl -O -s https://s3.us-west-2.amazonaws.com/amazon-eks/1.25.7/2023-03-17/bin/$(uname | tr '[:upper:]' '[:lower:]')/amd64/kubectl
+          chmod +x ./kubectl
+          sudo mv ./kubectl /usr/bin/
+          cat > ${HOME}/.kubectl-ac << EOF
+          source <(kubectl completion bash)
+          alias kc=kubectl
+          complete -F __start_kubectl kc
+EOF
+          echo "source ${HOME}/.kubectl-ac" >> ${HOME}/.bashrc
+          ;;
+        'helm')
+          curl -fsSL -o ${temp_dir}/get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+          chmod 700 ${temp_dir}/get_helm.sh
+          HELM_INSTALL_DIR=/usr/bin ${temp_dir}/get_helm.sh
+          ;;
+        *) 
+          echo "Unrecognised tool: ${tool}"
+          return 1
+          ;;
+      esac
+      logger "Tools successfully installed"
+    done
+  fi
 }
 
 create-local-k8s-cluster() {
@@ -457,8 +485,8 @@ usage() {
   echo
   echo "Flags:"
   echo "  --auto-approve             Suppress prompts regarding potentially destructive operations"
-  echo "  --operator-version <value> The version of the operator to install (default is ${OPERATOR_VERSION_DEFAULT})"
-  echo "  --cluster-name <value>     The cluster name to be registered in TLSPK (default is autogenerated or derived from 'kubectl config current-context')"
+  echo "  --operator-version <value> Optional for install-operator (default is ${OPERATOR_VERSION_DEFAULT})"
+  echo "  --cluster-name <value>     Optional for create-local-k8s-cluster (default is autogenerated or derived from 'kubectl config current-context')"
 }
 
 # ----- MAIN -----
