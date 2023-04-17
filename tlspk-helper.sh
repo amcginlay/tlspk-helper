@@ -98,6 +98,7 @@ install-dependencies() {
           complete -F __start_kubectl kc
 EOF
           echo "source ${HOME}/.kubectl-ac" >> ${HOME}/.bashrc
+          source ${HOME}/.kubectl-ac
           ;;
         'helm')
           curl -fsSL -o ${temp_dir}/get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
