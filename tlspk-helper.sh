@@ -85,7 +85,7 @@ install-dependencies() {
     for package in "${missing_packages[@]}"; do
       case ${package} in
         'jq'|'git')
-          sudo ${pm} update -y # optimize this!
+          sudo ${pm} update -y
           sudo ${pm} install ${package} -y
           ;;
         'kubectl')
@@ -97,8 +97,7 @@ install-dependencies() {
           alias kc=kubectl
           complete -F __start_kubectl kc
 EOF
-          echo "source ${HOME}/.kubectl-ac" >> ${HOME}/.bashrc
-          source ${HOME}/.kubectl-ac
+          echo "source ${HOME}/.kubectl-ac" >> ${HOME}/.bashrc # shell restart required
           ;;
         'helm')
           curl -fsSL -o ${temp_dir}/get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
@@ -133,8 +132,8 @@ EOF
       esac
     done
     logger "Required packages successfully installed"
-    if printf '%s\n' "${missing_packages[@]}" | grep -q "^docker$"; then
-      logger "!!!! IMPORTANT: please issue command 'newgrp docker' OR restart shell session for all changes to become effective !!!!"
+    if printf '%s\n' "${missing_packages[@]}" | grep -q "^docker$\|^kubectl$"; then
+      logger "!!!! IMPORTANT: please restart shell session OR issue command 'newgrp docker' for all changes to become effective !!!!"
     fi
   fi
 }
