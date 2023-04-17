@@ -4,10 +4,10 @@
 # work out why constructs like result=$(extract-secret-data) in get-dockerconfig cause base64 to blow up (definitely a quotes thing, but tempfiles seem to work OK for now).
 # work on eliminating the ugly "side effect" in get-dockerconfig
 # mimic range of cert errors/warninghs as per demo cluster (see org/pedantic-wiles)
-# think about splitting logger into 2 commands info (>1) and error (>2)
 # make the requirement for env vars more selective (e.g. ./tlspk-helper.sh discover-tls-secrets, shouldn't need them)
 # selective reintroduction of local function variables
-# do more Ubuntu tests
+
+# think about splitting logger into 2 commands info (>1) and error (>2)
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
@@ -144,13 +144,12 @@ create-local-k8s-cluster() {
     'amzn'|'ubuntu')
       logger "Creating a new Kubernetes cluster using k3d on localhost"
       newgrp docker << EOF
-        if netstat -tuln | grep -q :443; then
+        if sudo lsof -i :443 > /dev/null 2>&1; then 
           k3d cluster create ${TLSPK_CLUSTER_NAME} --wait # 443 TAKEN, NO LOADBALANCER
-          k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
-      else
+        else
           k3d cluster create ${TLSPK_CLUSTER_NAME} --wait -p 80:80@loadbalancer -p 443:443@loadbalancer
-          k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
-      fi
+        fi
+        k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
 EOF
       ;;
     # 'darwin')
