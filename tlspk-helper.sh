@@ -8,7 +8,6 @@
 # selective reintroduction of local function variables
 # add backup-certs and restore-certs
 # install agent via helm
-# eliminate URL repetition in error messages (use vars)
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
@@ -187,15 +186,17 @@ EOF
 }
 
 get-oauth-token() {
+  method_type=POST
+  url=https://auth.jetstack.io/oauth/token
   http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/token.out \
-    -X POST https://auth.jetstack.io/oauth/token \
+    -X ${method_type} ${url} \
     --data "audience=https://preflight.jetstack.io/api/v1" \
     --data "client_id=jmQwDGl86WAevq6K6zZo6hJ4WUvp14yD" \
     --data "grant_type=password" \
     --data "username=${TLSPK_SA_USER_ID}" \
     --data-urlencode "password=${TLSPK_SA_USER_SECRET}")
   if grep -qv "^2" <<< ${http_code}; then 
-    log-error "https://auth.jetstack.io/oauth/token [POST] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/token.out)'";
+    log-error "${method_type} ${url} failed: status code=${http_code} response='$(cat ${temp_dir}/token.out)'"
     return 1
   fi
   cat ${temp_dir}/token.out
@@ -223,12 +224,14 @@ create-secret() {
    fi
   oauth_token=$(jq .access_token --raw-output <<< ${oauth_token_json})
   pull_secret_request='[{"id":"","displayName":"'"$(get-secret-name)"'"}]'
+  method_type=POST
+  url=https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts
   http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/svc_account.out \
-    -X POST https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts \
+    -X ${method_type} ${url} \
     --header "authorization: Bearer ${oauth_token}" \
     --data "${pull_secret_request}")
   if grep -qv "^2" <<< ${http_code}; then
-    log-error "https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts [POST] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/svc_account.out)'"
+    log-error "${method_type} ${url} failed: status code=${http_code} response='$(cat ${temp_dir}/token.out)'"
     return 1
   fi
   cat ${temp_dir}/svc_account.out
