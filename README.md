@@ -12,6 +12,7 @@ while true; do
   aws s3 cp cfn-tlspk-cluster-bootstrapper.yaml s3://${bucket}/tlspk/
   aws s3 cp tlspk-helper.sh                     s3://${bucket}/tlspk/
   aws s3 cp tlspk-helper.README.txt             s3://${bucket}/tlspk/
+  aws s3 cp tlspk-disconnect-all-clusters.sh    s3://${bucket}/tlspk/
 done
 ```
 
