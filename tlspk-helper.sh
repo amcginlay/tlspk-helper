@@ -7,6 +7,9 @@
 # make the requirement for env vars more selective (e.g. ./tlspk-helper.sh discover-tls-secrets, shouldn't need them)
 # selective reintroduction of local function variables
 # add backup-certs and restore-certs
+# install agent via helm
+# eliminate URL repetition in error messages (use vars)
+
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
 OPERATOR_VERSION_DEFAULT="v0.0.1-alpha.24"
@@ -21,7 +24,7 @@ log-info() {
 
 log-error() {
   echo "${SCRIPT_NAME} [error]: $1" >&2
-  exit 1 # no need to hang around
+  return 1
 }
 
 finally() {
@@ -43,6 +46,7 @@ check-vars() {
   done
   if [[ ${#missing_vars[@]} -ne 0 ]]; then
     log-error "The following REQUIRED environment variables are missing: ${missing_vars[*]}"
+    return 1
   fi
 }
 
@@ -52,6 +56,7 @@ get-os() {
   grep -q "Ubuntu" <<< ${uname_result} && echo "ubuntu" && return
   grep -q "Darwin" <<< ${uname_result} && echo "darwin" && return
   log-error "Unsupported OS"
+  return 1
 }
 
 get-pm() {
@@ -59,6 +64,7 @@ get-pm() {
   [[ "${os}" == "amzn" ]]   && echo "yum" && return
   [[ "${os}" == "ubuntu" ]] && echo "apt" && return
   log-error "No package manager support for ${os}"
+  return 1
 }
 
 get-missing-packages() {
@@ -79,6 +85,7 @@ install-dependencies() {
     os=$(get-os)
     if [[ "${os}" != "amzn" && "${os}" != "ubuntu" ]]; then
       log-error "Manual installation of these packages is required for your OS"
+      return 1
     fi
     log-info "This operation will install the missing packages"
     approve-destructive-operation
@@ -128,6 +135,7 @@ EOF
           ;;
         *) 
           log-error "Unrecognised package: ${package}"
+          return 1
           ;;
       esac
     done
@@ -155,6 +163,7 @@ EOF
     # 'darwin')
     #   ! launchctl list | grep -q '^[[:digit:]].*application\.com\.docker\.docker.*' && {
     #     log-error "The Docker service needs to be manually started for your OS"
+    #     return 1
     #   }
     #   log-info "Creating a new Kubernetes cluster using k3d on localhost"
     #   lb_instances=$(sudo k3d cluster list --output json | jq '[.[] | select(.hasLoadbalancer == true)] | length')
@@ -166,6 +175,7 @@ EOF
     #   ;;
     *)
       log-error "Unrecognised OS: ${os}"
+      return 1
       ;;
   esac
   
@@ -184,14 +194,11 @@ get-oauth-token() {
     --data "grant_type=password" \
     --data "username=${TLSPK_SA_USER_ID}" \
     --data-urlencode "password=${TLSPK_SA_USER_SECRET}")
-  if grep -qv "^2" <<< ${http_code}; then log-error "https://auth.jetstack.io/oauth/token [POST] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/token.out)'"; fi
-  cat ${temp_dir}/token.out
-}
-
-check-auth() {
-  if ! get-oauth-token >/dev/null 2>&1; then
-    log-error "TLSPK_SA_USER_ID and/or TLSPK_SA_USER_SECRET creds do not yield an OAuth token. Check and correct before retrying."
+  if grep -qv "^2" <<< ${http_code}; then 
+    log-error "https://auth.jetstack.io/oauth/token [POST] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/token.out)'";
+    return 1
   fi
+  cat ${temp_dir}/token.out
 }
 
 derive-org-from-user() {
@@ -210,17 +217,20 @@ get-secret-name() {
 }
 
 create-secret() {
-  set +e
-  if ! oauth_token_json=$(get-oauth-token); then echo ${oauth_token_json}; return 1; fi
-  set -e
-    
+  if ! oauth_token_json=$(get-oauth-token); then 
+    log-error "get-oauth-token failed"
+    return 1
+   fi
   oauth_token=$(jq .access_token --raw-output <<< ${oauth_token_json})
   pull_secret_request='[{"id":"","displayName":"'"$(get-secret-name)"'"}]'
   http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/svc_account.out \
     -X POST https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts \
     --header "authorization: Bearer ${oauth_token}" \
     --data "${pull_secret_request}")
-  if grep -qv "^2" <<< ${http_code}; then log-error "https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts [POST] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/svc_account.out)'"; fi
+  if grep -qv "^2" <<< ${http_code}; then
+    log-error "https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts [POST] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/svc_account.out)'"
+    return 1
+  fi
   cat ${temp_dir}/svc_account.out
 }
 
@@ -236,23 +246,28 @@ get-secret() {
   secret_filename=$(get-secret-filename)
   if ! [[ -f ${secret_filename} ]]; then
     mkdir -p $(get-config-dir)
-    set +e
-    if ! secret=$(create-secret); then echo ${secret}; return 1; fi
+    if ! secret=$(create-secret); then
+      return 1
+    fi
     echo ${secret} > ${secret_filename}
   fi
   cat ${secret_filename}
 }
 
 extract-secret-data() {
-  if ! secret=$(get-secret); then echo ${secret}; return 1; fi
+  if ! secret=$(get-secret); then
+    log-error "get-secret"
+    return 1
+  fi
   jq '.[0].key.privateData' --raw-output <<< ${secret} | base64 --decode -${BASE64_WRAP_SWITCH} 0
 }
 
 get-dockerconfig()
 {
-  set +e
-  if ! extract-secret-data > ${temp_dir}/pull_secret.out; then echo ${secret}; return 1; fi # NOTE secret set in extract-secret-data (side effect)
-  set -e
+  if ! extract-secret-data > ${temp_dir}/pull_secret.out; then
+    log-error "extract-secret-data"
+    return 1
+  fi
 
   # despite documentation to the contrary, I don't believe "auths:eu.gcr.io:password" is required, so it's omitted
   cat <<-EOF > ${temp_dir}/dockerconfig_json.out
@@ -335,7 +350,6 @@ check-deployed() {
 
 deploy-agent() {
   check-undeployed jetstack-secure agent
-  check-auth
   show-cluster-status
   approve-destructive-operation
 
@@ -510,7 +524,7 @@ set -u
 unset COMMAND APPROVED
 while [[ $# -gt 0 ]]; do
   case $1 in
-    'usage'|'install-dependencies'|'get-oauth-token'|'get-dockerconfig'|'show-cluster-status'|'create-local-k8s-cluster'|'create-unsafe-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-safe-tls-secrets'|'check-auth'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
+    'usage'|'install-dependencies'|'get-oauth-token'|'get-dockerconfig'|'show-cluster-status'|'create-local-k8s-cluster'|'create-unsafe-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-safe-tls-secrets'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
       COMMAND=$1
       ;;
     '--auto-approve')
@@ -526,6 +540,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *) 
       log-error "Unrecognised command ${INPUT_ARGUMENTS}"
+      exit 1
       ;;
   esac
   shift
@@ -545,4 +560,7 @@ if ! [[ "${COMMAND}" == "usage" ]]; then
   derive-org-from-user
   unpatch-user-secret
 fi
-${COMMAND}
+if ! ${COMMAND}; then
+  log-error "${COMMAND} failed"
+  exit 1
+fi
