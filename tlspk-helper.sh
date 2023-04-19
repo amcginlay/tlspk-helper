@@ -3,12 +3,10 @@
 # TODO
 # work out why constructs like result=$(extract-secret-data) in get-dockerconfig cause base64 to blow up (definitely a quotes thing, but tempfiles seem to work OK for now).
 # work on eliminating the ugly "side effect" in get-dockerconfig
-# mimic range of cert errors/warninghs as per demo cluster (see org/pedantic-wiles)
+# mimic range of cert errors/warnings as per demo cluster (see org/pedantic-wiles)
 # make the requirement for env vars more selective (e.g. ./tlspk-helper.sh discover-tls-secrets, shouldn't need them)
 # selective reintroduction of local function variables
-
-# think about splitting logger into 2 commands info (>1) and error (>2)
-
+# add backup-certs and restore-certs
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
 OPERATOR_VERSION_DEFAULT="v0.0.1-alpha.24"
@@ -17,14 +15,19 @@ OPENSSL_NEGATIVE_DAYS=$(uname | grep -q Darwin && echo || echo -) # MacOS openss
 
 : ${DEBUG:="false"}
 
-logger() {
-  echo "${SCRIPT_NAME}: $1"
+log-info() {
+  echo "${SCRIPT_NAME} [info]: $1"
+}
+
+log-error() {
+  echo "${SCRIPT_NAME} [error]: $1" >&2
+  exit 1 # no need to hang around
 }
 
 finally() {
   exit_code=$?
   if [[ "$exit_code" != "0" ]]; then
-    logger "aborting!"
+    log-info "Aborting!"
   fi
   rm -rf ${temp_dir}
   exit $exit_code
@@ -39,8 +42,7 @@ check-vars() {
     fi
   done
   if [[ ${#missing_vars[@]} -ne 0 ]]; then
-    logger "the following REQUIRED environment variables are missing: ${missing_vars[*]}"
-    return 1
+    log-error "The following REQUIRED environment variables are missing: ${missing_vars[*]}"
   fi
 }
 
@@ -49,14 +51,14 @@ get-os() {
   grep -q "amzn" <<< ${uname_result}   && echo "amzn" && return
   grep -q "Ubuntu" <<< ${uname_result} && echo "ubuntu" && return
   grep -q "Darwin" <<< ${uname_result} && echo "darwin" && return
-  logger "Unsupported OS" && return 1
+  log-error "Unsupported OS"
 }
 
 get-pm() {
   os=$(get-os)
   [[ "${os}" == "amzn" ]]   && echo "yum" && return
   [[ "${os}" == "ubuntu" ]] && echo "apt" && return
-  logger "No package manager support for ${os}" && return 1
+  log-error "No package manager support for ${os}"
 }
 
 get-missing-packages() {
@@ -73,13 +75,12 @@ get-missing-packages() {
 install-dependencies() {
   missing_packages=($(get-missing-packages "jq" "git" "kubectl" "helm" "docker" "k3d"))
   if [[ ${#missing_packages[@]} -ne 0 ]]; then
-    logger "The following required packages are missing: ${missing_packages[*]}"
+    log-info "The following required packages are missing: ${missing_packages[*]}"
     os=$(get-os)
     if [[ "${os}" != "amzn" && "${os}" != "ubuntu" ]]; then
-      logger "Manual installation of these packages is required for your OS"
-      return 1
+      log-error "Manual installation of these packages is required for your OS"
     fi
-    logger "This operation will install the missing packages"
+    log-info "This operation will install the missing packages"
     approve-destructive-operation
     pm=$(get-pm)
     for package in "${missing_packages[@]}"; do
@@ -126,14 +127,13 @@ EOF
           curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | K3D_INSTALL_DIR=/usr/bin bash
           ;;
         *) 
-          logger "Unrecognised package: ${package}"
-          return 1
+          log-error "Unrecognised package: ${package}"
           ;;
       esac
     done
-    logger "Required packages successfully installed"
+    log-info "Required packages successfully installed"
     if printf '%s\n' "${missing_packages[@]}" | grep -q "^docker$\|^kubectl$"; then
-      logger "!!!! IMPORTANT: please restart shell session OR issue command 'newgrp docker' for all changes to become effective !!!!"
+      log-info "!!!! IMPORTANT: please restart shell session OR issue command 'newgrp docker' for all changes to become effective !!!!"
     fi
   fi
 }
@@ -142,7 +142,7 @@ create-local-k8s-cluster() {
   os=$(get-os)
   case ${os} in
     'amzn'|'ubuntu')
-      logger "Creating a new Kubernetes cluster using k3d on localhost"
+      log-info "Creating a new Kubernetes cluster using k3d on localhost"
       newgrp docker << EOF
         if sudo lsof -i :443 > /dev/null 2>&1; then 
           k3d cluster create ${TLSPK_CLUSTER_NAME} --wait # 443 TAKEN, NO LOADBALANCER
@@ -154,10 +154,9 @@ EOF
       ;;
     # 'darwin')
     #   ! launchctl list | grep -q '^[[:digit:]].*application\.com\.docker\.docker.*' && {
-    #     logger "The Docker service needs to be manually started for your OS"
-    #     return 1
+    #     log-error "The Docker service needs to be manually started for your OS"
     #   }
-    #   logger "Creating a new Kubernetes cluster using k3d on localhost"
+    #   log-info "Creating a new Kubernetes cluster using k3d on localhost"
     #   lb_instances=$(sudo k3d cluster list --output json | jq '[.[] | select(.hasLoadbalancer == true)] | length')
     #   if [[ ${lb_instances} -eq 0 ]]; then
     #     ports="-p 80:80@loadbalancer -p 443:443@loadbalancer"
@@ -166,12 +165,11 @@ EOF
     #   k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
     #   ;;
     *)
-      logger "Unrecognised OS: ${os}"
-      return 1
+      log-error "Unrecognised OS: ${os}"
       ;;
   esac
   
-  logger "awaiting cluster steady state"
+  log-info "Awaiting cluster steady state"
   sleep 5 && kubectl -n kube-system wait --for=condition=Available=True --all deployments --timeout=300s
   kubectl -n kube-system wait pod -l k8s-app=metrics-server --for=condition=Ready --timeout=300s
 
@@ -179,20 +177,20 @@ EOF
 }
 
 get-oauth-token() {
-  http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/token.out https://auth.jetstack.io/oauth/token \
+  http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/token.out \
+    -X POST https://auth.jetstack.io/oauth/token \
     --data "audience=https://preflight.jetstack.io/api/v1" \
     --data "client_id=jmQwDGl86WAevq6K6zZo6hJ4WUvp14yD" \
     --data "grant_type=password" \
     --data "username=${TLSPK_SA_USER_ID}" \
     --data-urlencode "password=${TLSPK_SA_USER_SECRET}")
+  if grep -qv "^2" <<< ${http_code}; then log-error "https://auth.jetstack.io/oauth/token [POST] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/token.out)'"; fi
   cat ${temp_dir}/token.out
-  if grep -qv "^2" <<< ${http_code}; then return 1; fi
 }
 
 check-auth() {
   if ! get-oauth-token >/dev/null 2>&1; then
-    logger "TLSPK_SA_USER_ID and/or TLSPK_SA_USER_SECRET creds do not yield an OAuth token. Check and correct before retrying."
-    return 1
+    log-error "TLSPK_SA_USER_ID and/or TLSPK_SA_USER_SECRET creds do not yield an OAuth token. Check and correct before retrying."
   fi
 }
 
@@ -218,11 +216,12 @@ create-secret() {
     
   oauth_token=$(jq .access_token --raw-output <<< ${oauth_token_json})
   pull_secret_request='[{"id":"","displayName":"'"$(get-secret-name)"'"}]'
-  http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/svc_account.out -X POST https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts \
+  http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/svc_account.out \
+    -X POST https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts \
     --header "authorization: Bearer ${oauth_token}" \
     --data "${pull_secret_request}")
+  if grep -qv "^2" <<< ${http_code}; then log-error "https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts [POST] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/svc_account.out)'"; fi
   cat ${temp_dir}/svc_account.out
-  if grep -qv "^2" <<< ${http_code}; then return 127; fi
 }
 
 get-config-dir() {
@@ -271,7 +270,7 @@ cat ${temp_dir}/dockerconfig_json.out
 }
 
 show-cluster-status() {
-  logger "Current context is $(kubectl config current-context)"
+  log-info "Current context is $(kubectl config current-context)"
   kubectl cluster-info | head -2
 }
 
@@ -280,8 +279,8 @@ approve-destructive-operation() {
     read -p "Are you sure? [y/N] " APPROVED
   fi
   if grep -qv "^y\|Y" <<< ${APPROVED}; then
-    logger "potentially destructive operation not approved. Override with '--auto-approve'"
-    return 1
+    log-info "Potentially destructive operation not approved. Override with '--auto-approve'"
+    return 1 # not an error, but still an exit condition
   fi
 }
 
@@ -312,18 +311,16 @@ EOF
 
 discover-tls-secrets() {
   show-cluster-status
-  logger "The following certificates were discovered:"
+  log-info "The following certificates were discovered:"
   kubectl get --raw /api/v1/secrets | jq -r '.items[] | select(.type == "kubernetes.io/tls") | "/namespaces/\(.metadata.namespace)/secrets/\(.metadata.name)"'
 }
 
 check-undeployed() {
   if kubectl get namespace ${1} >/dev/null 2>&1; then
     if kubectl -n ${1} rollout status deployment ${2} >/dev/null 2>&1; then
-      logger "${1}/${2} is already deployed"
-      return 1
+      log-info "${1}/${2} is already deployed"
     fi
-  fi
-  # if we got here, ${1}/${2} can be deployed
+  fi # if we got here, ${1}/${2} can be deployed
 }
 
 check-deployed() {
@@ -332,8 +329,8 @@ check-deployed() {
       return 0
     fi
   fi
-  logger "${1}/${2} is not deployed"
-  return 1
+  log-info "${1}/${2} is not deployed"
+  return 1 # not an error, but still an exit condition
 }
 
 deploy-agent() {
@@ -342,7 +339,7 @@ deploy-agent() {
   show-cluster-status
   approve-destructive-operation
 
-  logger "deploying TLSPK agent"
+  log-info "Deploying TLSPK agent"
 
   escaped_user_secret=$(echo ${TLSPK_SA_USER_SECRET} | sed 's/\\/\\\\/g') # 1) fix forward-slashes 
   escaped_user_secret=$(echo ${escaped_user_secret} | sed 's/"/\\"/g')    # 2) fix double-quotes
@@ -355,9 +352,9 @@ deploy-agent() {
     sed "s/{{ .CredentialsJSON }}/$(echo ${json_creds_b64} | sed 's/\//\\\//g')/g" | \
     kubectl apply -f -
   
-  logger "deploying TLSPK agent: awaiting steady state"
+  log-info "Deploying TLSPK agent: awaiting steady state"
   sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=300s
-  logger "cluster will appear in TLSPK as ${tlkps_cluster_name_adj}"
+  log-info "Cluster will appear in TLSPK as ${tlkps_cluster_name_adj}"
 }
 
 install-operator() {
@@ -367,12 +364,12 @@ install-operator() {
 
   get-dockerconfig > ${temp_dir}/dockerconfig.json
   
-  logger "replicating secret into cluster"
+  log-info "Replicating secret into cluster"
   kubectl create namespace jetstack-secure 2>/dev/null || true
   kubectl -n jetstack-secure delete secret jse-gcr-creds >/dev/null 2>&1 || true
   kubectl -n jetstack-secure create secret docker-registry jse-gcr-creds --from-file .dockerconfigjson=${temp_dir}/dockerconfig.json
 
-  logger "installing the operator"
+  log-info "Installing the operator"
   helm -n jetstack-secure upgrade -i js-operator \
     oci://eu.gcr.io/jetstack-secure-enterprise/charts/js-operator   \
     --version ${OPERATOR_VERSION} \
@@ -381,7 +378,7 @@ install-operator() {
     --set images.secret.name=jse-gcr-creds \
     --wait
 
-  logger "installing the operator: awaiting steady state"
+  log-info "Installing the operator: awaiting steady state"
   sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=300s
 }
 
@@ -390,7 +387,7 @@ deploy-operator-components() {
   show-cluster-status
   approve-destructive-operation
 
-  logger "deploy operator components (inc. cert-manager)"
+  log-info "Deploy operator components (inc. cert-manager)"
 
   kubectl create -f - <<EOF
   apiVersion: operator.jetstack.io/v1alpha1
@@ -408,7 +405,7 @@ deploy-operator-components() {
       secret: jse-gcr-creds
 EOF
 
-  logger "deploy operator components: awaiting steady state"
+  log-info "Deploy operator components: awaiting steady state"
   sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=300s
   kubectl -n jetstack-secure wait pod -l app=cert-manager --for=condition=Ready --timeout=300s
   kubectl -n jetstack-secure wait pod -l app=webhook --for=condition=Ready --timeout=300s
@@ -419,7 +416,7 @@ create-self-signed-issuer() {
   show-cluster-status
   approve-destructive-operation
 
-  logger "creating a self-signed issuer"
+  log-info "Creating a self-signed issuer"
   cat <<EOF > ${temp_dir}/patchfile
   spec:
     issuers:
@@ -429,7 +426,7 @@ create-self-signed-issuer() {
 EOF
   kubectl patch installation jetstack-secure --type merge --patch-file ${temp_dir}/patchfile
 
-  logger "deploy operator components: awaiting steady state"
+  log-info "Deploy operator components: awaiting steady state"
   sleep 5 # not sure we can "wait" on anything so just give the issuer a moment to appear
 }
 
@@ -438,7 +435,7 @@ create-safe-tls-secrets() {
   show-cluster-status
   approve-destructive-operation
 
-  logger "create cert-manager certs"
+  log-info "Create cert-manager certs"
 
   kubectl create namespace demo-certs 2>/dev/null || true
   subdomains=("hydrogen" "helium" "lithium" "beryllium" "boron" "carbon" "nitrogen" "oxygen" "fluorine" "neon")
@@ -504,7 +501,7 @@ if [[ "${DEBUG}" == "true" ]]; then
 fi
 
 temp_dir=$(mktemp -d)
-if ! os=$(get-os); then logger ${os}; exit 1; fi
+os=$(get-os)
 
 if [[ $# -eq 0 ]]; then set "usage"; fi # fake arg if none
 
@@ -528,9 +525,7 @@ while [[ $# -gt 0 ]]; do
       : ${TLSPK_CLUSTER_NAME:="${1}"}
       ;;
     *) 
-      logger "Unrecognised command ${INPUT_ARGUMENTS}"
-      usage
-      exit 1
+      log-error "Unrecognised command ${INPUT_ARGUMENTS}"
       ;;
   esac
   shift
