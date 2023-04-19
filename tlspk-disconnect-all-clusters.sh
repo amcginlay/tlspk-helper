@@ -17,7 +17,7 @@ log-error() {
 finally() {
   exit_code=$?
   if [[ "$exit_code" != "0" ]]; then
-    log-info "aborting!"
+    log-info "Aborting!"
   fi
   rm -rf ${temp_dir}
   exit $exit_code
@@ -37,7 +37,7 @@ check-vars() {
 }
 
 disconnect-all-clusters() {
-  log-info "Disconnecting all clusters from ${TLSPK_ORG}"
+  log-info "Disconnecting ALL clusters associated with your TLSPK organization ${TLSPK_ORG}"
   http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/clusters.out \
     -X GET https://platform.jetstack.io/api/v1/org/${TLSPK_ORG}/clusters \
     --header "authorization: Bearer ${TLSPK_ADMIN_TOKEN}")
@@ -63,7 +63,7 @@ fi
 
 temp_dir=$(mktemp -d)
 check-vars
-read -p "Removing ALL clusters from your TLSPK organization (${TLSPK_ORG}). This operation cannot be undone. Are you sure? [y/N] " APPROVED
+read -p "Disconnecting ALL clusters associated with your TLSPK organization ${TLSPK_ORG}. This operation cannot be undone. Are you sure? [y/N] " APPROVED
 if grep -qv "^y\|Y" <<< ${APPROVED}; then
   log-info "Operation not approved"
   exit 1
