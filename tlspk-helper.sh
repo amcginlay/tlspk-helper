@@ -1,12 +1,5 @@
 #!/usr/bin/env bash
 
-# TODO
-# work out why constructs like result=$(extract-secret-data) in get-dockerconfig cause base64 to blow up (definitely a quotes thing, but tempfiles seem to work OK for now).
-# mimic range of cert errors/warnings as per demo cluster (see org/pedantic-wiles)
-# deploy-agent via helm (not quite there yet ...)
-
-# add backup-certs and restore-certs
-
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
 OPERATOR_VERSION_DEFAULT="v0.0.1-alpha.24"
@@ -54,8 +47,8 @@ get-os() {
   local uname_result=$(uname -a)
   grep -q "amzn" <<< ${uname_result}   && echo "amzn" && return
   grep -q "Ubuntu" <<< ${uname_result} && echo "ubuntu" && return
-  grep -q "Darwin" <<< ${uname_result} && echo "darwin" && return
-  log-error "Unsupported OS"
+  # grep -q "Darwin" <<< ${uname_result} && echo "darwin" && return
+  log-error "Unsupported OS: uname=${uname_result}"
   return 1
 }
 
@@ -464,31 +457,6 @@ EOF
   kubectl -n jetstack-secure wait pod -l app=cert-manager --for=condition=Ready --timeout=300s
   kubectl -n jetstack-secure wait pod -l app=webhook --for=condition=Ready --timeout=300s
 }
-
-# create-self-signed-issuer() {
-#   local missing_packages=($(get-missing-package-dependencies "kubectl"))
-#   if [[ ${#missing_packages[@]} -gt 0 ]]; then
-#     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
-#     return 1
-#   fi
-
-#   check-deployed jetstack-secure cert-manager
-#   show-cluster-status
-#   approve-destructive-operation
-
-#   log-info "Creating a self-signed issuer"
-#   cat <<EOF > ${temp_dir}/patchfile
-#   spec:
-#     issuers:
-#       - name: self-signed
-#         clusterScope: true
-#         selfSigned: {}
-# EOF
-#   kubectl patch installation jetstack-secure --type merge --patch-file ${temp_dir}/patchfile
-
-#   log-info "Deploy operator components: awaiting steady state"
-#   sleep 5 # not sure we can "wait" on anything so just give the issuer a moment to appear
-# }
 
 create-safe-tls-secrets() {
   local missing_packages=($(get-missing-package-dependencies "kubectl"))
