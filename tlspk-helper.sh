@@ -3,16 +3,18 @@
 # TODO
 # work out why constructs like result=$(extract-secret-data) in get-dockerconfig cause base64 to blow up (definitely a quotes thing, but tempfiles seem to work OK for now).
 # mimic range of cert errors/warnings as per demo cluster (see org/pedantic-wiles)
+# deploy-agent via helm (not quite there yet ...)
+
 # add backup-certs and restore-certs
-# install agent via helm
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
 OPERATOR_VERSION_DEFAULT="v0.0.1-alpha.24"
+KUBECTL_VERSION_DEFAULT="1.25.7/2023-03-17"
+
 MISSING_ENV_VAR_MSG="The following REQUIRED environment variables are missing:"
 MISSING_PACKAGE_DEPENDENCIES_MSG="The following REQUIRED package dependencies are missing:"
 BASE64_WRAP_SWITCH=$(uname | grep -q Darwin && echo b || echo w)
-OPENSSL_NEGATIVE_DAYS=$(uname | grep -q Darwin && echo || echo -) # MacOS openssl doesn't support -ve days (for simulating expired certs)
 
 : ${DEBUG:="false"}
 
@@ -77,7 +79,7 @@ get-missing-package-dependencies() {
 }
 
 install-dependencies() {
-  local missing_packages=($(get-missing-package-dependencies "jq" "git" "kubectl" "helm" "docker" "k3d"))
+  local missing_packages=($(get-missing-package-dependencies "jq" "kubectl" "helm" "docker" "k3d"))
   if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-info "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     local os=$(get-os)
@@ -90,12 +92,12 @@ install-dependencies() {
     local pm=$(get-package-manager)
     for package in "${missing_packages[@]}"; do
       case ${package} in
-        'jq'|'git')
+        jq )
           sudo ${pm} update -y
           sudo ${pm} install ${package} -y
           ;;
-        'kubectl')
-          curl -O -s https://s3.us-west-2.amazonaws.com/amazon-eks/1.25.7/2023-03-17/bin/$(uname | tr '[:upper:]' '[:lower:]')/amd64/kubectl
+        kubectl )
+          curl -O -s https://s3.us-west-2.amazonaws.com/amazon-eks/${KUBECTL_VERSION}/bin/$(uname | tr '[:upper:]' '[:lower:]')/amd64/kubectl
           chmod +x ./kubectl
           sudo mv ./kubectl /usr/bin/
           cat > ${HOME}/.kubectl-ac << EOF
@@ -105,12 +107,12 @@ install-dependencies() {
 EOF
           echo "source ${HOME}/.kubectl-ac" >> ${HOME}/.bashrc # shell restart required
           ;;
-        'helm')
+        helm )
           curl -fsSL -o ${temp_dir}/get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
           chmod 700 ${temp_dir}/get_helm.sh
           HELM_INSTALL_DIR=/usr/bin ${temp_dir}/get_helm.sh
           ;;
-        'docker')
+        docker )
           sudo ${pm} update -y
           if [[ "${os}" == "amzn" ]]; then
             sudo ${pm} install -y docker
@@ -128,10 +130,10 @@ EOF
           sudo systemctl start docker.service
 EOF
           ;;
-        'k3d')
+        k3d )
           curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | K3D_INSTALL_DIR=/usr/bin bash
           ;;
-        *) 
+        * ) 
           log-error "Unrecognised package dependency: ${package}"
           return 1
           ;;
@@ -152,7 +154,7 @@ create-local-k8s-cluster() {
   fi
   local os=$(get-os)
   case ${os} in
-    'amzn'|'ubuntu')
+    amzn | ubuntu )
       log-info "Creating a new Kubernetes cluster using k3d on localhost"
       newgrp docker << EOF
         if sudo lsof -i :443 > /dev/null 2>&1; then 
@@ -163,20 +165,7 @@ create-local-k8s-cluster() {
         k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
 EOF
       ;;
-    # 'darwin')
-    #   ! launchctl list | grep -q '^[[:digit:]].*application\.com\.docker\.docker.*' && {
-    #     log-error "The Docker service needs to be manually started for your OS"
-    #     return 1
-    #   }
-    #   log-info "Creating a new Kubernetes cluster using k3d on localhost"
-    #   lb_instances=$(sudo k3d cluster list --output json | jq '[.[] | select(.hasLoadbalancer == true)] | length')
-    #   if [[ ${lb_instances} -eq 0 ]]; then
-    #     ports="-p 80:80@loadbalancer -p 443:443@loadbalancer"
-    #   fi
-    #   k3d cluster create ${TLSPK_CLUSTER_NAME} --wait ${ports}
-    #   k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
-    #   ;;
-    *)
+    * )
       log-error "Unrecognised OS: ${os}"
       return 1
       ;;
@@ -341,7 +330,8 @@ create-unsafe-tls-secrets() {
 EOF
   openssl genrsa -out ${temp_dir}/key.pem 2048 # https://gist.github.com/croxton/ebfb5f3ac143cd86542788f972434c96
   openssl req -new -key ${temp_dir}/key.pem -out ${temp_dir}/csr.pem -subj "/CN=kryptonite.elements.com" -reqexts req_ext -config ${temp_dir}/ssl.conf
-  openssl x509 -req -in ${temp_dir}/csr.pem -signkey ${temp_dir}/key.pem -out ${temp_dir}/cert.pem -days ${OPENSSL_NEGATIVE_DAYS}1 -extensions req_ext -extfile ${temp_dir}/ssl.conf
+  openssl_negative_days=$(uname | grep -q Darwin && echo || echo -) # MacOS openssl doesn't support -ve days (for simulating expired certs)
+  openssl x509 -req -in ${temp_dir}/csr.pem -signkey ${temp_dir}/key.pem -out ${temp_dir}/cert.pem -days ${openssl_negative_days}1 -extensions req_ext -extfile ${temp_dir}/ssl.conf
   kubectl create namespace demo-certs 2>/dev/null || true
   kubectl -n demo-certs create secret tls kryptonite-elements-com-tls --cert=${temp_dir}/cert.pem --key=${temp_dir}/key.pem
 }
@@ -376,7 +366,7 @@ check-deployed() {
 }
 
 deploy-agent() {
-  local missing_packages=($(get-missing-package-dependencies "kubectl"))
+  local missing_packages=($(get-missing-package-dependencies "kubectl" "helm"))
   if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
@@ -385,18 +375,30 @@ deploy-agent() {
   check-undeployed jetstack-secure agent
   show-cluster-status
   approve-destructive-operation
+
   log-info "Deploying TLSPK agent"
   local escaped_user_secret=$(echo ${TLSPK_SA_USER_SECRET} | sed 's/\\/\\\\/g') # 1) fix forward-slashes 
   escaped_user_secret=$(echo ${escaped_user_secret} | sed 's/"/\\"/g')    # 2) fix double-quotes
   local json_creds='{"user_id": "'"${TLSPK_SA_USER_ID}"'","user_secret": "'"${escaped_user_secret}"'"}'
   local json_creds_b64=$(echo ${json_creds} | base64 -${BASE64_WRAP_SWITCH} 0)
   local tlkps_cluster_name_adj=$(tr "-" "_" <<< ${TLSPK_CLUSTER_NAME})
+  
   curl -sL https://raw.githubusercontent.com/jetstack/jsctl/main/internal/cluster/templates/agent.yaml | \
     sed "s/{{ .Organization }}/${TLSPK_ORG}/g" | \
     sed "s/{{ .Name }}/${tlkps_cluster_name_adj}/g" | \
     sed "s/{{ .CredentialsJSON }}/$(echo ${json_creds_b64} | sed 's/\//\\\//g')/g" | \
     kubectl apply -f -
-  
+
+  # CURRENTLY HAVE A PERMISSIONS PROBLEM
+  # helm -n jetstack-secure upgrade -i js-agent \
+  #   oci://eu.gcr.io/jetstack-secure-enterprise/charts/jetstack-agent \
+  #   --create-namespace \
+  #   --set config.organisation="${TLSPK_ORG}" \
+  #   --set config.cluster="${tlkps_cluster_name_adj}" \
+  #   --set authentication.createSecret=true \
+  #   --set authentication.secretValue="$(echo ${json_creds_b64} | sed 's/\//\\\//g')" \
+  #   --wait
+
   log-info "Deploying TLSPK agent: awaiting steady state"
   sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=300s
   log-info "Cluster will appear in TLSPK as ${tlkps_cluster_name_adj}"
@@ -422,7 +424,8 @@ install-operator() {
 
   log-info "Installing the operator"
   helm -n jetstack-secure upgrade -i js-operator \
-    oci://eu.gcr.io/jetstack-secure-enterprise/charts/js-operator   \
+    oci://eu.gcr.io/jetstack-secure-enterprise/charts/js-operator \
+    --create-namespace \
     --version ${OPERATOR_VERSION} \
     --registry-config ${temp_dir}/dockerconfig.json \
     --set images.secret.enabled=true   \
@@ -543,7 +546,7 @@ usage() {
   echo "  TLSPK_SA_USER_SECRET       User Secret of a TLSPK service account (use single-quotes to preserve control chars!)"
   echo
   echo "Available Commands:"
-  echo "  install-dependencies       Installs ALL the package dependencies required by commands in this script (jq git kubectl helm docker k3d) "
+  echo "  install-dependencies       Installs ALL the package dependencies required by commands in this script (jq kubectl helm docker k3d) "
   echo "  get-oauth-token            Obtains token for TLSPK_SA_USER_ID/TLSPK_SA_USER_SECRET pair"
   echo "  get-dockerconfig           Obtains Docker-compatible registry config / image pull secret (as used with 'helm upgrade --registry-config')"
   echo "  create-local-k8s-cluster   Create a new k8s cluster on localhost (uses k3d)"
@@ -558,6 +561,7 @@ usage() {
   echo "Flags:"
   echo "  --auto-approve             Suppress prompts regarding potentially destructive operations"
   echo "  --operator-version <value> Optional for install-operator (default is ${OPERATOR_VERSION_DEFAULT})"
+  echo "  --kubectl-version <value>  Optional (default is ${KUBECTL_VERSION_DEFAULT})"
   echo "  --cluster-name <value>     Optional for create-local-k8s-cluster (default is autogenerated or derived from 'kubectl config current-context')"
 }
 
@@ -599,6 +603,10 @@ while [[ $# -gt 0 ]]; do
       shift
       : ${OPERATOR_VERSION:="${1}"}
       ;;
+    --kubectl-version )
+      shift
+      : ${KUBECTL_VERSION:="${1}"}
+      ;;
     --cluster-name )
       shift
       : ${TLSPK_CLUSTER_NAME:="${1}"}
@@ -612,6 +620,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 : ${OPERATOR_VERSION:=${OPERATOR_VERSION_DEFAULT}}
+: ${KUBECTL_VERSION:=${KUBECTL_VERSION_DEFAULT}}
 
 if ! [[ "${COMMAND}" == "create-local-k8s-cluster" ]] && kubectl config current-context >/dev/null 2>&1; then
   : ${TLSPK_CLUSTER_NAME:=$(kubectl config current-context | tr '@' '.' | cut -c-21)-$(date +"%y%m%d%H%M")}

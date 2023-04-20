@@ -1,6 +1,5 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: https://venafi-ecosystem.s3.amazonaws.com/tlspk/cfn-tlspk-cluster-bootstrapper.yaml
-
 Parameters:
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
