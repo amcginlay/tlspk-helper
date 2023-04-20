@@ -382,22 +382,17 @@ deploy-agent() {
   local json_creds='{"user_id": "'"${TLSPK_SA_USER_ID}"'","user_secret": "'"${escaped_user_secret}"'"}'
   local json_creds_b64=$(echo ${json_creds} | base64 -${BASE64_WRAP_SWITCH} 0)
   local tlkps_cluster_name_adj=$(tr "-" "_" <<< ${TLSPK_CLUSTER_NAME})
-  
-  curl -sL https://raw.githubusercontent.com/jetstack/jsctl/main/internal/cluster/templates/agent.yaml | \
-    sed "s/{{ .Organization }}/${TLSPK_ORG}/g" | \
-    sed "s/{{ .Name }}/${tlkps_cluster_name_adj}/g" | \
-    sed "s/{{ .CredentialsJSON }}/$(echo ${json_creds_b64} | sed 's/\//\\\//g')/g" | \
-    kubectl apply -f -
 
-  # CURRENTLY HAVE A PERMISSIONS PROBLEM
-  # helm -n jetstack-secure upgrade -i js-agent \
-  #   oci://eu.gcr.io/jetstack-secure-enterprise/charts/jetstack-agent \
-  #   --create-namespace \
-  #   --set config.organisation="${TLSPK_ORG}" \
-  #   --set config.cluster="${tlkps_cluster_name_adj}" \
-  #   --set authentication.createSecret=true \
-  #   --set authentication.secretValue="$(echo ${json_creds_b64} | sed 's/\//\\\//g')" \
-  #   --wait
+  get-dockerconfig > ${temp_dir}/dockerconfig.json
+  helm -n jetstack-secure upgrade -i js-agent \
+    oci://eu.gcr.io/jetstack-secure-enterprise/charts/jetstack-agent \
+    --create-namespace \
+    --registry-config ${temp_dir}/dockerconfig.json \
+    --set config.organisation="${TLSPK_ORG}" \
+    --set config.cluster="${tlkps_cluster_name_adj}" \
+    --set authentication.createSecret=true \
+    --set authentication.secretValue="$(echo ${json_creds_b64} | sed 's/\//\\\//g')" \
+    --wait
 
   log-info "Deploying TLSPK agent: awaiting steady state"
   sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=300s
@@ -414,10 +409,9 @@ install-operator() {
   check-undeployed jetstack-secure js-operator-operator
   show-cluster-status
   approve-destructive-operation
-
-  get-dockerconfig > ${temp_dir}/dockerconfig.json
   
   log-info "Replicating secret into cluster"
+  get-dockerconfig > ${temp_dir}/dockerconfig.json
   kubectl create namespace jetstack-secure 2>/dev/null || true
   kubectl -n jetstack-secure delete secret jse-gcr-creds >/dev/null 2>&1 || true
   kubectl -n jetstack-secure create secret docker-registry jse-gcr-creds --from-file .dockerconfigjson=${temp_dir}/dockerconfig.json
@@ -471,7 +465,32 @@ EOF
   kubectl -n jetstack-secure wait pod -l app=webhook --for=condition=Ready --timeout=300s
 }
 
-create-self-signed-issuer() {
+# create-self-signed-issuer() {
+#   local missing_packages=($(get-missing-package-dependencies "kubectl"))
+#   if [[ ${#missing_packages[@]} -gt 0 ]]; then
+#     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
+#     return 1
+#   fi
+
+#   check-deployed jetstack-secure cert-manager
+#   show-cluster-status
+#   approve-destructive-operation
+
+#   log-info "Creating a self-signed issuer"
+#   cat <<EOF > ${temp_dir}/patchfile
+#   spec:
+#     issuers:
+#       - name: self-signed
+#         clusterScope: true
+#         selfSigned: {}
+# EOF
+#   kubectl patch installation jetstack-secure --type merge --patch-file ${temp_dir}/patchfile
+
+#   log-info "Deploy operator components: awaiting steady state"
+#   sleep 5 # not sure we can "wait" on anything so just give the issuer a moment to appear
+# }
+
+create-safe-tls-secrets() {
   local missing_packages=($(get-missing-package-dependencies "kubectl"))
   if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
@@ -491,24 +510,9 @@ create-self-signed-issuer() {
         selfSigned: {}
 EOF
   kubectl patch installation jetstack-secure --type merge --patch-file ${temp_dir}/patchfile
-
-  log-info "Deploy operator components: awaiting steady state"
   sleep 5 # not sure we can "wait" on anything so just give the issuer a moment to appear
-}
-
-create-safe-tls-secrets() {
-  local missing_packages=($(get-missing-package-dependencies "kubectl"))
-  if [[ ${#missing_packages[@]} -gt 0 ]]; then
-    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
-    return 1
-  fi
-
-  check-deployed jetstack-secure cert-manager
-  show-cluster-status
-  approve-destructive-operation
 
   log-info "Create cert-manager certs"
-
   kubectl create namespace demo-certs 2>/dev/null || true
   local subdomains=("hydrogen" "helium" "lithium" "beryllium" "boron" "carbon" "nitrogen" "oxygen" "fluorine" "neon")
   local durations=( "8760"     "4320"   "2160"    "720"       "240"   "120"    "96"       "24"     "6"        "1")
@@ -546,16 +550,15 @@ usage() {
   echo "  TLSPK_SA_USER_SECRET       User Secret of a TLSPK service account (use single-quotes to preserve control chars!)"
   echo
   echo "Available Commands:"
-  echo "  install-dependencies       Installs ALL the package dependencies required by commands in this script (jq kubectl helm docker k3d) "
+  echo "  install-dependencies       Installs ALL the package dependencies required by commands in this script (jq git kubectl helm docker k3d) "
   echo "  get-oauth-token            Obtains token for TLSPK_SA_USER_ID/TLSPK_SA_USER_SECRET pair"
   echo "  get-dockerconfig           Obtains Docker-compatible registry config / image pull secret (as used with 'helm upgrade --registry-config')"
   echo "  create-local-k8s-cluster   Create a new k8s cluster on localhost (uses k3d)"
-  echo "  create-unsafe-tls-secrets  Define TLS Secrets in the demo-certs namespace (NOT protected by cert-manager)"
   echo "  discover-tls-secrets       Scan the current cluster for TLS secrets"
   echo "  deploy-agent               Deploys the TLSPK agent component"
   echo "  install-operator           Installs the TLSPK operator"
   echo "  deploy-operator-components Deploys minimal operator components, incluing cert-manager"
-  echo "  create-self-signed-issuer  Use cert-manager ClusterIssuer CRD to define a cluster-wide self-signed issuer"
+  echo "  create-unsafe-tls-secrets  Define TLS Secrets in the demo-certs namespace (NOT protected by cert-manager)"
   echo "  create-safe-tls-secrets    Use cert-manager Certificate CRD to define a collection of self-signed certificates in the demo-certs namespace"
   echo
   echo "Flags:"
@@ -587,12 +590,11 @@ while [[ $# -gt 0 ]]; do
     get-oauth-token | \
     get-dockerconfig | \
     create-local-k8s-cluster | \
-    create-unsafe-tls-secrets | \
     discover-tls-secrets | \
     deploy-agent | \
     install-operator | \
     deploy-operator-components | \
-    create-self-signed-issuer | \
+    create-unsafe-tls-secrets | \
     create-safe-tls-secrets )
       COMMAND=$1
       ;;

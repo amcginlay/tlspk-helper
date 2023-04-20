@@ -94,11 +94,10 @@ Resources:
 
                 ./tlspk-helper.sh install-dependencies       --auto-approve
                 ./tlspk-helper.sh create-local-k8s-cluster   --auto-approve
-                ./tlspk-helper.sh create-unsafe-tls-secrets  --auto-approve
                 ./tlspk-helper.sh deploy-agent               --auto-approve
                 ./tlspk-helper.sh install-operator           --auto-approve
                 ./tlspk-helper.sh deploy-operator-components --auto-approve
-                ./tlspk-helper.sh create-self-signed-issuer  --auto-approve
+                ./tlspk-helper.sh create-unsafe-tls-secrets  --auto-approve
                 ./tlspk-helper.sh create-safe-tls-secrets    --auto-approve
 
                 /opt/aws/bin/cfn-signal -e 0 --stack ${AWS::StackName} --resource K8sClusterAutoScalingGroup --region ${AWS::Region}
