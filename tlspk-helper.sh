@@ -73,12 +73,12 @@ get-missing-package-dependencies() {
       missing+=("$package")
     fi
   done
-  echo ${missing[*]}
+  if [[ ${#missing[@]} -ne 0 ]]; then echo ${missing[*]}; fi
 }
 
 install-dependencies() {
   local missing_packages=($(get-missing-package-dependencies "jq" "git" "kubectl" "helm" "docker" "k3d"))
-  if [[ ${#missing_packages[@]} -ne 0 ]]; then
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-info "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     local os=$(get-os)
     if [[ "${os}" != "amzn" && "${os}" != "ubuntu" ]]; then
@@ -145,7 +145,8 @@ EOF
 }
 
 create-local-k8s-cluster() {
-  if missing_packages=($(get-missing-package-dependencies "docker" "k3d" "kubectl")); then
+  local missing_packages=($(get-missing-package-dependencies "docker" "k3d" "kubectl"))
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
@@ -261,7 +262,8 @@ get-secret() {
 }
 
 extract-secret-data() {
-  if missing_packages=($(get-missing-package-dependencies "jq")); then
+  local missing_packages=($(get-missing-package-dependencies "jq"))
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
@@ -295,7 +297,8 @@ cat ${temp_dir}/dockerconfig_json.out
 }
 
 show-cluster-status() {
-  if missing_packages=($(get-missing-package-dependencies "kubectl")); then
+  local missing_packages=($(get-missing-package-dependencies "kubectl"))
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
@@ -314,7 +317,8 @@ approve-destructive-operation() {
 }
 
 create-unsafe-tls-secrets() {
-  if missing_packages=($(get-missing-package-dependencies "kubectl")); then
+  local missing_packages=($(get-missing-package-dependencies "kubectl"))
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
@@ -343,7 +347,8 @@ EOF
 }
 
 discover-tls-secrets() {
-  if missing_packages=($(get-missing-package-dependencies "kubectl")); then
+  local missing_packages=($(get-missing-package-dependencies "kubectl"))
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
@@ -371,7 +376,8 @@ check-deployed() {
 }
 
 deploy-agent() {
-  if missing_packages=($(get-missing-package-dependencies "kubectl")); then
+  local missing_packages=($(get-missing-package-dependencies "kubectl"))
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
@@ -397,7 +403,8 @@ deploy-agent() {
 }
 
 install-operator() {
-  if missing_packages=($(get-missing-package-dependencies "kubectl" "helm")); then
+  local missing_packages=($(get-missing-package-dependencies "kubectl" "helm"))
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
@@ -427,7 +434,8 @@ install-operator() {
 }
 
 deploy-operator-components() {
-  if missing_packages=($(get-missing-package-dependencies "kubectl")); then
+  local missing_packages=($(get-missing-package-dependencies "kubectl"))
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
@@ -461,7 +469,8 @@ EOF
 }
 
 create-self-signed-issuer() {
-  if missing_packages=($(get-missing-package-dependencies "kubectl")); then
+  local missing_packages=($(get-missing-package-dependencies "kubectl"))
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
@@ -485,7 +494,8 @@ EOF
 }
 
 create-safe-tls-secrets() {
-  if missing_packages=($(get-missing-package-dependencies "kubectl")); then
+  local missing_packages=($(get-missing-package-dependencies "kubectl"))
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
