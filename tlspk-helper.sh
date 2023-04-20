@@ -5,9 +5,9 @@
 # work on eliminating the ugly "side effect" in get-dockerconfig
 # mimic range of cert errors/warnings as per demo cluster (see org/pedantic-wiles)
 # make the requirement for env vars more selective (e.g. ./tlspk-helper.sh discover-tls-secrets, shouldn't need them)
-# selective reintroduction of local function variables
 # add backup-certs and restore-certs
 # install agent via helm
+# standardise on internal use of the term "package dependency"
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
@@ -27,7 +27,7 @@ log-error() {
 }
 
 finally() {
-  exit_code=$?
+  local exit_code=$?
   if [[ "$exit_code" != "0" ]]; then
     log-info "Aborting!"
   fi
@@ -36,8 +36,8 @@ finally() {
 }
 
 check-vars() {
-  required_vars=("TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET")
-  missing_vars=()
+  local required_vars=("TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET")
+  local missing_vars=()
   for var in "${required_vars[@]}"; do
     if [[ -z "${!var}" ]]; then
       missing_vars+=("$var")
@@ -50,7 +50,7 @@ check-vars() {
 }
 
 get-os() {
-  uname_result=$(uname -a)
+  local uname_result=$(uname -a)
   grep -q "amzn" <<< ${uname_result}   && echo "amzn" && return
   grep -q "Ubuntu" <<< ${uname_result} && echo "ubuntu" && return
   grep -q "Darwin" <<< ${uname_result} && echo "darwin" && return
@@ -59,7 +59,7 @@ get-os() {
 }
 
 get-pm() {
-  os=$(get-os)
+  local os=$(get-os)
   [[ "${os}" == "amzn" ]]   && echo "yum" && return
   [[ "${os}" == "ubuntu" ]] && echo "apt" && return
   log-error "No package manager support for ${os}"
@@ -67,8 +67,8 @@ get-pm() {
 }
 
 get-missing-packages() {
-  required_packages=("$@")
-  missing_packages=()
+  local required_packages=("$@")
+  local missing_packages=()
   for package in "${required_packages[@]}"; do
     if ! command -v "$package" &> /dev/null; then
       missing_packages+=("$package")
@@ -77,18 +77,26 @@ get-missing-packages() {
   echo ${missing_packages[*]}
 }
 
+# all_installed() {
+#   local missing_packages=$(get-missing-packages "$@")
+#   if [[ ${#missing_packages[@]} -ne 0 ]]; then
+#     log-error "The following REQUIRED packages are missing: ${missing_packages[*]}"
+#     return 1
+#   fi
+# }
+
 install-dependencies() {
-  missing_packages=($(get-missing-packages "jq" "git" "kubectl" "helm" "docker" "k3d"))
+  local missing_packages=($(get-missing-packages "jq" "git" "kubectl" "helm" "docker" "k3d"))
   if [[ ${#missing_packages[@]} -ne 0 ]]; then
     log-info "The following required packages are missing: ${missing_packages[*]}"
-    os=$(get-os)
+    local os=$(get-os)
     if [[ "${os}" != "amzn" && "${os}" != "ubuntu" ]]; then
       log-error "Manual installation of these packages is required for your OS"
       return 1
     fi
     log-info "This operation will install the missing packages"
     approve-destructive-operation
-    pm=$(get-pm)
+    local pm=$(get-pm)
     for package in "${missing_packages[@]}"; do
       case ${package} in
         'jq'|'git')
@@ -146,7 +154,11 @@ EOF
 }
 
 create-local-k8s-cluster() {
-  os=$(get-os)
+  if missing_packages=($(get-missing-packages "docker" "k3d" "kubectl")); then
+    log-error "The following required packages are missing: ${missing_packages[*]}"
+    return 1
+  fi
+  local os=$(get-os)
   case ${os} in
     'amzn'|'ubuntu')
       log-info "Creating a new Kubernetes cluster using k3d on localhost"
@@ -186,9 +198,9 @@ EOF
 }
 
 get-oauth-token() {
-  method_type=POST
-  url=https://auth.jetstack.io/oauth/token
-  http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/token.out \
+  local method_type=POST
+  local url=https://auth.jetstack.io/oauth/token
+  local http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/token.out \
     -X ${method_type} ${url} \
     --data "audience=https://preflight.jetstack.io/api/v1" \
     --data "client_id=jmQwDGl86WAevq6K6zZo6hJ4WUvp14yD" \
@@ -203,14 +215,14 @@ get-oauth-token() {
 }
 
 derive-org-from-user() {
-  TLSPK_ORG=$(cut -d'@' -f2- <<< ${TLSPK_SA_USER_ID} | cut -d'.' -f1)
+  TLSPK_ORG=$(cut -d'@' -f2- <<< ${TLSPK_SA_USER_ID} | cut -d'.' -f1) # TLSPK_ORG is globally scoped
 }
 
 unpatch-user-secret() {
   # HACK! never found a proper fix for preserving '$' from CloudFormation preprocessing
   # use sed 's/\$/_DOLLAR_/g' in the UserData to allow exported vars to pass thru
   # this function is the counterpart which reverses that hack
-  TLSPK_SA_USER_SECRET=$(sed 's/_DOLLAR_/\$/g' <<< ${TLSPK_SA_USER_SECRET})
+  TLSPK_SA_USER_SECRET=$(sed 's/_DOLLAR_/\$/g' <<< ${TLSPK_SA_USER_SECRET}) # TLSPK_SA_USER_SECRET is globally scoped
 }
 
 get-secret-name() {
@@ -222,16 +234,16 @@ create-secret() {
     log-error "get-oauth-token failed"
     return 1
    fi
-  oauth_token=$(jq .access_token --raw-output <<< ${oauth_token_json})
-  pull_secret_request='[{"id":"","displayName":"'"$(get-secret-name)"'"}]'
-  method_type=POST
-  url=https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts
-  http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/svc_account.out \
+  local oauth_token=$(jq .access_token --raw-output <<< ${oauth_token_json})
+  local pull_secret_request='[{"id":"","displayName":"'"$(get-secret-name)"'"}]'
+  local method_type=POST
+  local url=https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts
+  local http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/svc_account.out \
     -X ${method_type} ${url} \
     --header "authorization: Bearer ${oauth_token}" \
     --data "${pull_secret_request}")
   if grep -qv "^2" <<< ${http_code}; then
-    log-error "${method_type} ${url} failed: status code=${http_code} response='$(cat ${temp_dir}/token.out)'"
+    log-error "${method_type} ${url} failed: status code=${http_code} response='$(cat ${temp_dir}/svc_account.out)'"
     return 1
   fi
   cat ${temp_dir}/svc_account.out
@@ -246,7 +258,7 @@ get-secret-filename() {
 }
 
 get-secret() {
-  secret_filename=$(get-secret-filename)
+  local secret_filename=$(get-secret-filename)
   if ! [[ -f ${secret_filename} ]]; then
     mkdir -p $(get-config-dir)
     if ! secret=$(create-secret); then
@@ -258,6 +270,10 @@ get-secret() {
 }
 
 extract-secret-data() {
+  if missing_packages=($(get-missing-packages "jq")); then
+    log-error "The following required packages are missing: ${missing_packages[*]}"
+    return 1
+  fi
   if ! secret=$(get-secret); then
     log-error "get-secret"
     return 1
@@ -288,6 +304,10 @@ cat ${temp_dir}/dockerconfig_json.out
 }
 
 show-cluster-status() {
+  if missing_packages=($(get-missing-packages "kubectl")); then
+    log-error "The following required packages are missing: ${missing_packages[*]}"
+    return 1
+  fi
   log-info "Current context is $(kubectl config current-context)"
   kubectl cluster-info | head -2
 }
@@ -303,6 +323,10 @@ approve-destructive-operation() {
 }
 
 create-unsafe-tls-secrets() {
+  if missing_packages=($(get-missing-packages "kubectl")); then
+    log-error "The following required packages are missing: ${missing_packages[*]}"
+    return 1
+  fi
   cat <<EOF > ${temp_dir}/ssl.conf
   [ req ]
   default_bits		= 2048
@@ -328,6 +352,10 @@ EOF
 }
 
 discover-tls-secrets() {
+  if missing_packages=($(get-missing-packages "kubectl")); then
+    log-error "The following required packages are missing: ${missing_packages[*]}"
+    return 1
+  fi
   show-cluster-status
   log-info "The following certificates were discovered:"
   kubectl get --raw /api/v1/secrets | jq -r '.items[] | select(.type == "kubernetes.io/tls") | "/namespaces/\(.metadata.namespace)/secrets/\(.metadata.name)"'
@@ -352,17 +380,20 @@ check-deployed() {
 }
 
 deploy-agent() {
+  if missing_packages=($(get-missing-packages "kubectl")); then
+    log-error "The following required packages are missing: ${missing_packages[*]}"
+    return 1
+  fi
+
   check-undeployed jetstack-secure agent
   show-cluster-status
   approve-destructive-operation
-
   log-info "Deploying TLSPK agent"
-
-  escaped_user_secret=$(echo ${TLSPK_SA_USER_SECRET} | sed 's/\\/\\\\/g') # 1) fix forward-slashes 
+  local escaped_user_secret=$(echo ${TLSPK_SA_USER_SECRET} | sed 's/\\/\\\\/g') # 1) fix forward-slashes 
   escaped_user_secret=$(echo ${escaped_user_secret} | sed 's/"/\\"/g')    # 2) fix double-quotes
-  json_creds='{"user_id": "'"${TLSPK_SA_USER_ID}"'","user_secret": "'"${escaped_user_secret}"'"}'
-  json_creds_b64=$(echo ${json_creds} | base64 -${BASE64_WRAP_SWITCH} 0)
-  tlkps_cluster_name_adj=$(tr "-" "_" <<< ${TLSPK_CLUSTER_NAME})
+  local json_creds='{"user_id": "'"${TLSPK_SA_USER_ID}"'","user_secret": "'"${escaped_user_secret}"'"}'
+  local json_creds_b64=$(echo ${json_creds} | base64 -${BASE64_WRAP_SWITCH} 0)
+  local tlkps_cluster_name_adj=$(tr "-" "_" <<< ${TLSPK_CLUSTER_NAME})
   curl -sL https://raw.githubusercontent.com/jetstack/jsctl/main/internal/cluster/templates/agent.yaml | \
     sed "s/{{ .Organization }}/${TLSPK_ORG}/g" | \
     sed "s/{{ .Name }}/${tlkps_cluster_name_adj}/g" | \
@@ -375,6 +406,11 @@ deploy-agent() {
 }
 
 install-operator() {
+  if missing_packages=($(get-missing-packages "kubectl" "helm")); then
+    log-error "The following required packages are missing: ${missing_packages[*]}"
+    return 1
+  fi
+
   check-undeployed jetstack-secure js-operator-operator
   show-cluster-status
   approve-destructive-operation
@@ -400,6 +436,11 @@ install-operator() {
 }
 
 deploy-operator-components() {
+  if missing_packages=($(get-missing-packages "kubectl")); then
+    log-error "The following required packages are missing: ${missing_packages[*]}"
+    return 1
+  fi
+
   check-undeployed jetstack-secure cert-manager
   show-cluster-status
   approve-destructive-operation
@@ -429,6 +470,11 @@ EOF
 }
 
 create-self-signed-issuer() {
+  if missing_packages=($(get-missing-packages "kubectl")); then
+    log-error "The following required packages are missing: ${missing_packages[*]}"
+    return 1
+  fi
+
   check-deployed jetstack-secure cert-manager
   show-cluster-status
   approve-destructive-operation
@@ -448,6 +494,11 @@ EOF
 }
 
 create-safe-tls-secrets() {
+  if missing_packages=($(get-missing-packages "kubectl")); then
+    log-error "The following required packages are missing: ${missing_packages[*]}"
+    return 1
+  fi
+
   check-deployed jetstack-secure cert-manager
   show-cluster-status
   approve-destructive-operation
@@ -455,8 +506,8 @@ create-safe-tls-secrets() {
   log-info "Create cert-manager certs"
 
   kubectl create namespace demo-certs 2>/dev/null || true
-  subdomains=("hydrogen" "helium" "lithium" "beryllium" "boron" "carbon" "nitrogen" "oxygen" "fluorine" "neon")
-  durations=( "8760"     "4320"   "2160"    "720"       "240"   "120"    "96"       "24"     "6"        "1")
+  local subdomains=("hydrogen" "helium" "lithium" "beryllium" "boron" "carbon" "nitrogen" "oxygen" "fluorine" "neon")
+  local durations=( "8760"     "4320"   "2160"    "720"       "240"   "120"    "96"       "24"     "6"        "1")
   for i in "${!subdomains[@]}"; do
     cat << EOF | kubectl -n demo-certs apply -f -
     apiVersion: cert-manager.io/v1
