@@ -89,7 +89,7 @@ Resources:
                 cd
                 export TLSPK_SA_USER_ID=${TLSPKSAUserId}
                 export TLSPK_SA_USER_SECRET='$(sed 's/\$/_DOLLAR_/g' <<< '${TLSPKSAUserSecret}')'
-                export TLSPK_CLUSTER_NAME=${AWS::StackName}-$(date +"%y%m%d%H%M%N" | cut -c-12) # date suffixed to ensure TLSPK doesn't consider it a dupe
+                export TLSPK_CLUSTER_NAME=${AWS::StackName}-$(date +"%y%m%d%H%M%N" | cut -c-13) # date suffixed to ensure TLSPK doesn't consider it a dupe
                 curl -fsSLO https://${EcosystemBucket}.s3.amazonaws.com/tlspk/tlspk-helper.sh && chmod 700 tlspk-helper.sh
 
                 ./tlspk-helper.sh install-dependencies       --auto-approve
