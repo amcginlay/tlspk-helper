@@ -11,7 +11,7 @@ log-info() {
 
 log-error() {
   echo "${SCRIPT_NAME} [error]: $1" >&2
-  exit 1 # no need to hang around
+  return 1
 }
 
 finally() {
@@ -33,6 +33,7 @@ check-vars() {
   done
   if [[ ${#missing_vars[@]} -ne 0 ]]; then
     log-error "the following REQUIRED environment variables are missing: ${missing_vars[*]}"
+    return 1
   fi
 }
 
@@ -41,7 +42,10 @@ delete-all-image-pull-secrets() {
   http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/image-pull-secrets.out \
     -X GET https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts \
     --header "authorization: Bearer ${TLSPK_ADMIN_TOKEN}")
-  if grep -qv "^2" <<< ${http_code}; then log-error "https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts [GET] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/image-pull-secrets.out)'"; fi
+  if grep -qv "^2" <<< ${http_code}; then
+    log-error "https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts [GET] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/image-pull-secrets.out)'"
+    return 1
+  fi
   image_pull_secrets=($(jq '.[].id' --raw-output < ${temp_dir}/image-pull-secrets.out))
   for image_pull_secret in "${image_pull_secrets[@]}"; do
     log-info "Deleting ${image_pull_secret}"
@@ -50,13 +54,16 @@ delete-all-image-pull-secrets() {
         -X DELETE https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts \
         --header "authorization: Bearer ${TLSPK_ADMIN_TOKEN}" \
         --data "${pull_secret_request}")
-    if grep -qv "^2" <<< ${http_code}; then log-error "https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts [DELETE] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/image-pull-secret-${cluster}.out)'"; fi
+    if grep -qv "^2" <<< ${http_code}; then
+      log-error "https://platform.jetstack.io/subscription/api/v1/org/${TLSPK_ORG}/svc_accounts [DELETE] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/image-pull-secret-${cluster}.out)'"
+      return 1
+    fi
   done
 }
 
 # ----- MAIN -----
 trap "finally" EXIT
-set -e
+set -eu
 
 if [[ "${DEBUG}" == "true" ]]; then
   set -x

@@ -11,7 +11,7 @@ log-info() {
 
 log-error() {
   echo "${SCRIPT_NAME} [error]: $1" >&2
-  exit 1 # no need to hang around
+  return 1
 }
 
 finally() {
@@ -33,6 +33,7 @@ check-vars() {
   done
   if [[ ${#missing_vars[@]} -ne 0 ]]; then
     log-error "the following REQUIRED environment variables are missing: ${missing_vars[*]}"
+    return 1
   fi
 }
 
@@ -41,7 +42,10 @@ disconnect-all-clusters() {
   http_code=$(curl --no-progress-meter -L -w "%{http_code}" -o ${temp_dir}/clusters.out \
     -X GET https://platform.jetstack.io/api/v1/org/${TLSPK_ORG}/clusters \
     --header "authorization: Bearer ${TLSPK_ADMIN_TOKEN}")
-  if grep -qv "^2" <<< ${http_code}; then log-error "https://platform.jetstack.io/api/v1/org/${TLSPK_ORG}/clusters [GET] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/clusters.out)'"; fi
+  if grep -qv "^2" <<< ${http_code}; then
+    log-error "https://platform.jetstack.io/api/v1/org/${TLSPK_ORG}/clusters [GET] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/clusters.out)'"
+    return 1
+  fi
   clusters=($(jq '.[].cluster' --raw-output < ${temp_dir}/clusters.out))
   for cluster in "${clusters[@]}"; do
     log-info "Deleting ${cluster}"
@@ -49,13 +53,16 @@ disconnect-all-clusters() {
         -X DELETE https://platform.jetstack.io/api/v1/org/${TLSPK_ORG}/clusters/${cluster} \
         --header "authorization: Bearer ${TLSPK_ADMIN_TOKEN}")
     cat ${temp_dir}/deletion-${cluster}.out
-    if grep -qv "^2" <<< ${http_code}; then log-error "https://platform.jetstack.io/api/v1/org/${TLSPK_ORG}/clusters/${cluster} [DELETE] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/deletion-${cluster}.out)'"; fi
+    if grep -qv "^2" <<< ${http_code}; then
+      log-error "https://platform.jetstack.io/api/v1/org/${TLSPK_ORG}/clusters/${cluster} [DELETE] failed with HTTP status code ${http_code} and response '$(cat ${temp_dir}/deletion-${cluster}.out)'"
+      return 1
+    fi
   done
 }
 
 # ----- MAIN -----
 trap "finally" EXIT
-set -e
+set -eu
 
 if [[ "${DEBUG}" == "true" ]]; then
   set -x
