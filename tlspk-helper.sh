@@ -79,7 +79,7 @@ get-missing-package-dependencies() {
 }
 
 install-dependencies() {
-  local missing_packages=($(get-missing-package-dependencies "jq" "kubectl" "helm" "docker" "k3d"))
+  local missing_packages=($(get-missing-package-dependencies "jq" "git" "kubectl" "helm" "docker" "k3d"))
   if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-info "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     local os=$(get-os)
@@ -92,7 +92,7 @@ install-dependencies() {
     local pm=$(get-package-manager)
     for package in "${missing_packages[@]}"; do
       case ${package} in
-        jq )
+        jq | git )
           sudo ${pm} update -y
           sudo ${pm} install ${package} -y
           ;;
