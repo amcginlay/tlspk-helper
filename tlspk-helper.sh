@@ -2,16 +2,15 @@
 
 # TODO
 # work out why constructs like result=$(extract-secret-data) in get-dockerconfig cause base64 to blow up (definitely a quotes thing, but tempfiles seem to work OK for now).
-# work on eliminating the ugly "side effect" in get-dockerconfig
 # mimic range of cert errors/warnings as per demo cluster (see org/pedantic-wiles)
-# make the requirement for env vars more selective (e.g. ./tlspk-helper.sh discover-tls-secrets, shouldn't need them)
 # add backup-certs and restore-certs
 # install agent via helm
-# standardise on internal use of the term "package dependency"
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
 OPERATOR_VERSION_DEFAULT="v0.0.1-alpha.24"
+MISSING_ENV_VAR_MSG="The following REQUIRED environment variables are missing:"
+MISSING_PACKAGE_DEPENDENCIES_MSG="The following REQUIRED package dependencies are missing:"
 BASE64_WRAP_SWITCH=$(uname | grep -q Darwin && echo b || echo w)
 OPENSSL_NEGATIVE_DAYS=$(uname | grep -q Darwin && echo || echo -) # MacOS openssl doesn't support -ve days (for simulating expired certs)
 
@@ -44,7 +43,7 @@ check-vars() {
     fi
   done
   if [[ ${#missing_vars[@]} -ne 0 ]]; then
-    log-error "The following REQUIRED environment variables are missing: ${missing_vars[*]}"
+    log-error "${MISSING_ENV_VAR_MSG} ${missing_vars[*]}"
     return 1
   fi
 }
@@ -58,7 +57,7 @@ get-os() {
   return 1
 }
 
-get-pm() {
+get-package-manager() {
   local os=$(get-os)
   [[ "${os}" == "amzn" ]]   && echo "yum" && return
   [[ "${os}" == "ubuntu" ]] && echo "apt" && return
@@ -66,37 +65,29 @@ get-pm() {
   return 1
 }
 
-get-missing-packages() {
-  local required_packages=("$@")
-  local missing_packages=()
-  for package in "${required_packages[@]}"; do
+get-missing-package-dependencies() {
+  local required=("$@")
+  local missing=()
+  for package in "${required[@]}"; do
     if ! command -v "$package" &> /dev/null; then
-      missing_packages+=("$package")
+      missing+=("$package")
     fi
   done
-  echo ${missing_packages[*]}
+  echo ${missing[*]}
 }
 
-# all_installed() {
-#   local missing_packages=$(get-missing-packages "$@")
-#   if [[ ${#missing_packages[@]} -ne 0 ]]; then
-#     log-error "The following REQUIRED packages are missing: ${missing_packages[*]}"
-#     return 1
-#   fi
-# }
-
 install-dependencies() {
-  local missing_packages=($(get-missing-packages "jq" "git" "kubectl" "helm" "docker" "k3d"))
+  local missing_packages=($(get-missing-package-dependencies "jq" "git" "kubectl" "helm" "docker" "k3d"))
   if [[ ${#missing_packages[@]} -ne 0 ]]; then
-    log-info "The following required packages are missing: ${missing_packages[*]}"
+    log-info "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     local os=$(get-os)
     if [[ "${os}" != "amzn" && "${os}" != "ubuntu" ]]; then
-      log-error "Manual installation of these packages is required for your OS"
+      log-error "Manual installation of these package dependencies is required for your OS"
       return 1
     fi
-    log-info "This operation will install the missing packages"
+    log-info "This operation will install the missing package dependencies"
     approve-destructive-operation
-    local pm=$(get-pm)
+    local pm=$(get-package-manager)
     for package in "${missing_packages[@]}"; do
       case ${package} in
         'jq'|'git')
@@ -141,12 +132,12 @@ EOF
           curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | K3D_INSTALL_DIR=/usr/bin bash
           ;;
         *) 
-          log-error "Unrecognised package: ${package}"
+          log-error "Unrecognised package dependency: ${package}"
           return 1
           ;;
       esac
     done
-    log-info "Required packages successfully installed"
+    log-info "Required package dependencies successfully installed"
     if printf '%s\n' "${missing_packages[@]}" | grep -q "^docker$\|^kubectl$"; then
       log-info "!!!! IMPORTANT: please restart shell session OR issue command 'newgrp docker' for all changes to become effective !!!!"
     fi
@@ -154,8 +145,8 @@ EOF
 }
 
 create-local-k8s-cluster() {
-  if missing_packages=($(get-missing-packages "docker" "k3d" "kubectl")); then
-    log-error "The following required packages are missing: ${missing_packages[*]}"
+  if missing_packages=($(get-missing-package-dependencies "docker" "k3d" "kubectl")); then
+    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
   local os=$(get-os)
@@ -270,8 +261,8 @@ get-secret() {
 }
 
 extract-secret-data() {
-  if missing_packages=($(get-missing-packages "jq")); then
-    log-error "The following required packages are missing: ${missing_packages[*]}"
+  if missing_packages=($(get-missing-package-dependencies "jq")); then
+    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
   if ! secret=$(get-secret); then
@@ -304,8 +295,8 @@ cat ${temp_dir}/dockerconfig_json.out
 }
 
 show-cluster-status() {
-  if missing_packages=($(get-missing-packages "kubectl")); then
-    log-error "The following required packages are missing: ${missing_packages[*]}"
+  if missing_packages=($(get-missing-package-dependencies "kubectl")); then
+    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
   log-info "Current context is $(kubectl config current-context)"
@@ -323,8 +314,8 @@ approve-destructive-operation() {
 }
 
 create-unsafe-tls-secrets() {
-  if missing_packages=($(get-missing-packages "kubectl")); then
-    log-error "The following required packages are missing: ${missing_packages[*]}"
+  if missing_packages=($(get-missing-package-dependencies "kubectl")); then
+    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
   cat <<EOF > ${temp_dir}/ssl.conf
@@ -352,8 +343,8 @@ EOF
 }
 
 discover-tls-secrets() {
-  if missing_packages=($(get-missing-packages "kubectl")); then
-    log-error "The following required packages are missing: ${missing_packages[*]}"
+  if missing_packages=($(get-missing-package-dependencies "kubectl")); then
+    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
   show-cluster-status
@@ -380,8 +371,8 @@ check-deployed() {
 }
 
 deploy-agent() {
-  if missing_packages=($(get-missing-packages "kubectl")); then
-    log-error "The following required packages are missing: ${missing_packages[*]}"
+  if missing_packages=($(get-missing-package-dependencies "kubectl")); then
+    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
 
@@ -406,8 +397,8 @@ deploy-agent() {
 }
 
 install-operator() {
-  if missing_packages=($(get-missing-packages "kubectl" "helm")); then
-    log-error "The following required packages are missing: ${missing_packages[*]}"
+  if missing_packages=($(get-missing-package-dependencies "kubectl" "helm")); then
+    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
 
@@ -436,8 +427,8 @@ install-operator() {
 }
 
 deploy-operator-components() {
-  if missing_packages=($(get-missing-packages "kubectl")); then
-    log-error "The following required packages are missing: ${missing_packages[*]}"
+  if missing_packages=($(get-missing-package-dependencies "kubectl")); then
+    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
 
@@ -470,8 +461,8 @@ EOF
 }
 
 create-self-signed-issuer() {
-  if missing_packages=($(get-missing-packages "kubectl")); then
-    log-error "The following required packages are missing: ${missing_packages[*]}"
+  if missing_packages=($(get-missing-package-dependencies "kubectl")); then
+    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
 
@@ -494,8 +485,8 @@ EOF
 }
 
 create-safe-tls-secrets() {
-  if missing_packages=($(get-missing-packages "kubectl")); then
-    log-error "The following required packages are missing: ${missing_packages[*]}"
+  if missing_packages=($(get-missing-package-dependencies "kubectl")); then
+    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
 
@@ -542,7 +533,7 @@ usage() {
   echo "  TLSPK_SA_USER_SECRET       User Secret of a TLSPK service account (use single-quotes to preserve control chars!)"
   echo
   echo "Available Commands:"
-  echo "  install-dependencies       Installs ALL the dependencies required by commands in this script (jq git kubectl helm docker k3d) "
+  echo "  install-dependencies       Installs ALL the package dependencies required by commands in this script (jq git kubectl helm docker k3d) "
   echo "  get-oauth-token            Obtains token for TLSPK_SA_USER_ID/TLSPK_SA_USER_SECRET pair"
   echo "  get-dockerconfig           Obtains Docker-compatible registry config / image pull secret (as used with 'helm upgrade --registry-config')"
   echo "  create-local-k8s-cluster   Create a new k8s cluster on localhost (uses k3d)"
@@ -562,7 +553,7 @@ usage() {
 
 # ----- MAIN -----
 trap "finally" EXIT
-set -e
+set -eu
 
 if [[ "${DEBUG}" == "true" ]]; then
   set -x
@@ -571,35 +562,44 @@ fi
 temp_dir=$(mktemp -d)
 os=$(get-os)
 
-if [[ $# -eq 0 ]]; then set "usage"; fi # fake arg if none
+if [[ $# -eq 0 ]] || grep -q '^--' <<< $1; then set "usage"; fi
 
-INPUT_ARGUMENTS="${@}"
-set -u
+args="${@}"
 unset COMMAND APPROVED
 while [[ $# -gt 0 ]]; do
   case $1 in
-    'usage'|'install-dependencies'|'get-oauth-token'|'get-dockerconfig'|'show-cluster-status'|'create-local-k8s-cluster'|'create-unsafe-tls-secrets'|'discover-tls-secrets'|'deploy-agent'|'install-operator'|'deploy-operator-components'|'create-self-signed-issuer'|'create-safe-tls-secrets'|'extract-secret-data'|'get-secret'|'get-secret-filename'|'get-config-dir'|'create-secret')
+    usage | \
+    install-dependencies | \
+    get-oauth-token | \
+    get-dockerconfig | \
+    create-local-k8s-cluster | \
+    create-unsafe-tls-secrets | \
+    discover-tls-secrets | \
+    deploy-agent | \
+    install-operator | \
+    deploy-operator-components | \
+    create-self-signed-issuer | \
+    create-safe-tls-secrets )
       COMMAND=$1
       ;;
-    '--auto-approve')
+    --auto-approve )
       : ${APPROVED:="y"}
       ;;
-    '--operator-version')
+    --operator-version )
       shift
       : ${OPERATOR_VERSION:="${1}"}
       ;;
-    '--cluster-name')
+    --cluster-name )
       shift
       : ${TLSPK_CLUSTER_NAME:="${1}"}
       ;;
     *) 
-      log-error "Unrecognised command ${INPUT_ARGUMENTS}"
+      log-error "Unrecognised command ${args}"
       exit 1
       ;;
   esac
   shift
 done
-set +u
 
 : ${OPERATOR_VERSION:=${OPERATOR_VERSION_DEFAULT}}
 
