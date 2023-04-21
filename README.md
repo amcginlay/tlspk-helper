@@ -8,12 +8,9 @@ bucket=venafi-ecosystem-dev # drop the "-dev" as appropriate
 
 while true; do
   notifywait .
-  echo "uploading tlspk-helper.sh"
-  aws s3 cp cfn-tlspk-cluster-bootstrapper.yaml    s3://${bucket}/tlspk/
-  aws s3 cp tlspk-helper.sh                        s3://${bucket}/tlspk/
   aws s3 cp tlspk-helper.README.txt                s3://${bucket}/tlspk/
-  aws s3 cp tlspk-disconnect-all-clusters.sh       s3://${bucket}/tlspk/
-  aws s3 cp tlspk-delete-all-image-pull-secrets.sh s3://${bucket}/tlspk/
+  aws s3 cp v1/cfn-tlspk-cluster-bootstrapper.yaml s3://${bucket}/tlspk/v1/
+  aws s3 cp v1/tlspk-helper.sh                     s3://${bucket}/tlspk/v1/
 done
 ```
 
