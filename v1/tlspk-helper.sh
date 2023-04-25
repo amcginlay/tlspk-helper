@@ -33,8 +33,8 @@ check-vars() {
   local required_vars=("TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET")
   local missing_vars=()
   for var in "${required_vars[@]}"; do
-    if [[ -z "${!var}" ]]; then
-      missing_vars+=("$var")
+    if [[ -z "${var}" ]]; then
+      missing_vars+=("${var}")
     fi
   done
   if [[ ${#missing_vars[@]} -ne 0 ]]; then
