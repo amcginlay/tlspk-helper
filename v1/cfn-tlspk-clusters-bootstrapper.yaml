@@ -79,12 +79,12 @@ Resources:
             !Sub |
               #!/usr/bin/env bash
               su ec2-user << EOF
-                set -e
                 finally() {
                   /opt/aws/bin/cfn-signal -e 1 --stack ${AWS::StackName} --resource K8sClusterAutoScalingGroup --region ${AWS::Region}
                   exit 1
                 }
                 trap "finally" ERR
+                set -eu
 
                 cd
                 export TLSPK_SA_USER_ID=${TLSPKSAUserId}
