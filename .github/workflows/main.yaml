@@ -6,10 +6,10 @@ on:
     branches:
       - main
     paths:
-      - v1/tlspk-helper.README.txt
+      - tlspk-helper.README.txt
       - v1/cfn-tlspk-cluster-bootstrapper.yaml
       - v1/cfn-tlspk-clusters-bootstrapper.yaml
-      - tlspk-helper.sh
+      - v1/tlspk-helper.sh
 
 jobs:
   upload:
