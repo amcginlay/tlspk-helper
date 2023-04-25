@@ -8,6 +8,7 @@ on:
     paths:
       - v1/tlspk-helper.README.txt
       - v1/cfn-tlspk-cluster-bootstrapper.yaml
+      - v1/cfn-tlspk-clusters-bootstrapper.yaml
       - tlspk-helper.sh
 
 jobs:
@@ -26,6 +27,7 @@ jobs:
 
     - name: Upload Files
       run: |
-        aws s3 cp tlspk-helper.README.txt                s3://venafi-ecosystem/tlspk/
-        aws s3 cp v1/cfn-tlspk-cluster-bootstrapper.yaml s3://venafi-ecosystem/tlspk/v1/
-        aws s3 cp v1/tlspk-helper.sh                     s3://venafi-ecosystem/tlspk/v1/
+        aws s3 cp tlspk-helper.README.txt                 s3://venafi-ecosystem/tlspk/
+        aws s3 cp v1/cfn-tlspk-cluster-bootstrapper.yaml  s3://venafi-ecosystem/tlspk/v1/
+        aws s3 cp v1/cfn-tlspk-clusters-bootstrapper.yaml s3://venafi-ecosystem/tlspk/v1/
+        aws s3 cp v1/tlspk-helper.sh                      s3://venafi-ecosystem/tlspk/v1/

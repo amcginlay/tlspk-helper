@@ -25,12 +25,7 @@ Parameters:
     NoEcho: true
     AllowedPattern : '.+'
     Description: The matching Secret for the provided TLS Protect For Kubernetes service account User ID
-  NumberOfInstances:
-    Type: Number
-    Default: 1
-    MinValue: 1
-    MaxValue: 10
-    Description: Indicates how many EC2 instances are required. NOTE each EC2 hosts a single K8s cluster.
+
 Resources:
   SSHSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -41,64 +36,49 @@ Resources:
           FromPort: 22
           ToPort: 22
           CidrIp: 0.0.0.0/0
-  K8sClusterAutoScalingGroup:
-    Type: AWS::AutoScaling::AutoScalingGroup
+  K8sCluster:
+    Type: AWS::EC2::Instance
     CreationPolicy:
       ResourceSignal:
-        Count: !Ref NumberOfInstances
+        Count: 1
         Timeout: "PT10M"
     Properties:
-      AvailabilityZones:
-        - !Sub ${AWS::Region}a
-        - !Sub ${AWS::Region}b
-        - !Sub ${AWS::Region}c
-      DesiredCapacity: !Ref NumberOfInstances
-      MinSize: 1
-      MaxSize: 10
-      LaunchTemplate:
-        LaunchTemplateId: !Ref K8sClusterLaunchTemplate
-        Version: !GetAtt K8sClusterLaunchTemplate.LatestVersionNumber
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      SecurityGroupIds:
+        - !Ref SSHSecurityGroup # enable EC2 Instance Connect
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/usr/bin/env bash
+            su ec2-user << EOF
+              set -e
+              finally() {
+                /opt/aws/bin/cfn-signal -e 1 --stack ${AWS::StackName} --resource K8sCluster --region ${AWS::Region}
+                exit 1
+              }
+              trap "finally" ERR
+
+              cd
+              export TLSPK_SA_USER_ID=${TLSPKSAUserId}
+              export TLSPK_SA_USER_SECRET='$(sed 's/\$/_DOLLAR_/g' <<< '${TLSPKSAUserSecret}')'
+              export TLSPK_CLUSTER_NAME=${AWS::StackName}-$(date +"%y%m%d%H%M%N" | cut -c-13) # date suffixed to ensure TLSPK doesn't consider it a dupe
+              curl -fsSLO https://${EcosystemBucket}.s3.amazonaws.com/tlspk/v1/tlspk-helper.sh && chmod 700 tlspk-helper.sh
+
+              ./tlspk-helper.sh install-dependencies       --auto-approve
+              ./tlspk-helper.sh create-local-k8s-cluster   --auto-approve
+              ./tlspk-helper.sh create-unsafe-tls-secrets  --auto-approve
+              ./tlspk-helper.sh deploy-agent               --auto-approve
+              ./tlspk-helper.sh install-operator           --auto-approve
+              ./tlspk-helper.sh deploy-operator-components --auto-approve
+              ./tlspk-helper.sh create-safe-tls-secrets    --auto-approve
+
+              /opt/aws/bin/cfn-signal -e 0 --stack ${AWS::StackName} --resource K8sCluster --region ${AWS::Region}
+            EOF
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}
-          PropagateAtLaunch: True
-  K8sClusterLaunchTemplate:
-    Type: AWS::EC2::LaunchTemplate
-    Properties:
-      LaunchTemplateData:      
-        ImageId: !Ref LatestAmiId
-        InstanceType: !Ref InstanceType
-        SecurityGroups:
-          - !Ref SSHSecurityGroup # enable EC2 Instance Connect
-        BlockDeviceMappings:
-          - DeviceName: /dev/xvda
-            Ebs:
-              VolumeSize: 30
-        UserData:
-          Fn::Base64:
-            !Sub |
-              #!/usr/bin/env bash
-              su ec2-user << EOF
-                set -e
-                finally() {
-                  /opt/aws/bin/cfn-signal -e 1 --stack ${AWS::StackName} --resource K8sClusterAutoScalingGroup --region ${AWS::Region}
-                  exit 1
-                }
-                trap "finally" ERR
-
-                cd
-                export TLSPK_SA_USER_ID=${TLSPKSAUserId}
-                export TLSPK_SA_USER_SECRET='$(sed 's/\$/_DOLLAR_/g' <<< '${TLSPKSAUserSecret}')'
-                export TLSPK_CLUSTER_NAME=${AWS::StackName}-$(date +"%y%m%d%H%M%N" | cut -c-13) # date suffixed to ensure TLSPK doesn't consider it a dupe
-                curl -fsSLO https://${EcosystemBucket}.s3.amazonaws.com/tlspk/v1/tlspk-helper.sh && chmod 700 tlspk-helper.sh
-
-                ./tlspk-helper.sh install-dependencies       --auto-approve
-                ./tlspk-helper.sh create-local-k8s-cluster   --auto-approve
-                ./tlspk-helper.sh deploy-agent               --auto-approve
-                ./tlspk-helper.sh install-operator           --auto-approve
-                ./tlspk-helper.sh deploy-operator-components --auto-approve
-                ./tlspk-helper.sh create-unsafe-tls-secrets  --auto-approve
-                ./tlspk-helper.sh create-safe-tls-secrets    --auto-approve
-
-                /opt/aws/bin/cfn-signal -e 0 --stack ${AWS::StackName} --resource K8sClusterAutoScalingGroup --region ${AWS::Region}
-              EOF
