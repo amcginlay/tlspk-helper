@@ -8,9 +8,10 @@ bucket=venafi-ecosystem-dev # drop the "-dev" as appropriate
 
 while true; do
   notifywait .
-  aws s3 cp tlspk-helper.README.txt                s3://${bucket}/tlspk/
-  aws s3 cp v1/cfn-tlspk-cluster-bootstrapper.yaml s3://${bucket}/tlspk/v1/
-  aws s3 cp v1/tlspk-helper.sh                     s3://${bucket}/tlspk/v1/
+  aws s3 cp tlspk-helper.README.txt                 s3://${bucket}/tlspk/
+  aws s3 cp v1/cfn-tlspk-cluster-bootstrapper.yaml  s3://${bucket}/tlspk/v1/
+  aws s3 cp v1/cfn-tlspk-cluster-bootstrappers.yaml s3://${bucket}/tlspk/v1/
+  aws s3 cp v1/tlspk-helper.sh                      s3://${bucket}/tlspk/v1/
 done
 ```
 
