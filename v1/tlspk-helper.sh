@@ -32,11 +32,13 @@ finally() {
 check-vars() {
   local required_vars=("TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET")
   local missing_vars=()
+  set +u # <<< allow test for potentially unbound variable
   for var in "${required_vars[@]}"; do
-    if [[ -z "${var}" ]]; then
+    if [[ -z "${!var}" ]]; then
       missing_vars+=("${var}")
     fi
   done
+  set -u # <<< revert
   if [[ ${#missing_vars[@]} -ne 0 ]]; then
     log-error "${MISSING_ENV_VAR_MSG} ${missing_vars[*]}"
     return 1
@@ -47,7 +49,7 @@ get-os() {
   local uname_result=$(uname -a)
   grep -q "amzn" <<< ${uname_result}   && echo "amzn" && return
   grep -q "Ubuntu" <<< ${uname_result} && echo "ubuntu" && return
-  # grep -q "Darwin" <<< ${uname_result} && echo "darwin" && return
+  grep -q "Darwin" <<< ${uname_result} && echo "darwin" && return
   log-error "Unsupported OS: uname=${uname_result}"
   return 1
 }
@@ -158,13 +160,17 @@ create-local-k8s-cluster() {
         k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
 EOF
       ;;
+    darwin )
+      log-info "Creating a new Kubernetes cluster using k3d on localhost"
+      k3d cluster create ${TLSPK_CLUSTER_NAME} --wait # simple install, avoid sudo
+      ;;
     * )
       log-error "Unrecognised OS: ${os}"
       return 1
       ;;
   esac
   
-  log-info "Awaiting cluster steady state"
+  log-info "Awaiting cluster steady state (ignore any memcache/metrics errors here)"
   sleep 5 && kubectl -n kube-system wait --for=condition=Available=True --all deployments --timeout=300s
   kubectl -n kube-system wait pod -l k8s-app=metrics-server --for=condition=Ready --timeout=300s
 
@@ -389,7 +395,7 @@ deploy-agent() {
 
   log-info "Deploying TLSPK agent: awaiting steady state"
   sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=300s
-  log-info "Cluster will appear in TLSPK as ${tlkps_cluster_name_adj}"
+  log-info "If TLSPK agent is running, this cluster will show in TLSPK as ${tlkps_cluster_name_adj}"
 }
 
 install-operator() {
