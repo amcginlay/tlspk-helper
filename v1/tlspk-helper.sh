@@ -2,8 +2,8 @@
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="0.1"
-AGENT_VERSION_DEFAULT="0.1.0"               # gcrane ls eu.gcr.io/jetstack-secure-enterprise/charts/jetstack-agent
-OPERATOR_VERSION_DEFAULT="v0.0.1-alpha.24"  # gcrane ls eu.gcr.io/jetstack-secure-enterprise/charts/js-operator
+AGENT_VERSION_DEFAULT="0.2.0"               # gcrane ls eu.gcr.io/jetstack-secure-enterprise/charts/jetstack-agent
+OPERATOR_VERSION_DEFAULT="v0.0.1-alpha.25"  # gcrane ls eu.gcr.io/jetstack-secure-enterprise/charts/js-operator
 KUBECTL_VERSION_DEFAULT="1.25.7/2023-03-17"
 
 MISSING_ENV_VAR_MSG="The following REQUIRED environment variables are missing:"
