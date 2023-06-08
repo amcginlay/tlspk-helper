@@ -56,11 +56,11 @@ Resources:
           !Sub |
             #!/usr/bin/env bash
             su ec2-user << EOF
-              finally() {
+              catch() {
                 /opt/aws/bin/cfn-signal -e 1 --stack ${AWS::StackName} --resource K8sCluster --region ${AWS::Region}
                 exit 1
               }
-              trap "finally" ERR
+              trap "catch" ERR
               set -eu
 
               cd
