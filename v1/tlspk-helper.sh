@@ -311,6 +311,7 @@ create-unsafe-tls-secrets() {
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     return 1
   fi
+  rogue_cert_name=kryptonite
   cat <<EOF > ${temp_dir}/ssl.conf
   [ req ]
   default_bits		= 2048
@@ -318,7 +319,7 @@ create-unsafe-tls-secrets() {
   req_extensions		= req_ext
   
   [ req_distinguished_name ]
-  commonName          = kryptonite.elements.com
+  commonName          = ${rogue_cert_name}.elements.com
   
   [ req_ext ]
   keyUsage            = digitalSignature, keyEncipherment
@@ -326,14 +327,14 @@ create-unsafe-tls-secrets() {
   subjectAltName      = @alt_names
   
   [ alt_names ]
-  DNS.1               = kryptonite.elements.com
+  DNS.1               = ${rogue_cert_name}.elements.com
 EOF
   openssl genrsa -out ${temp_dir}/key.pem 2048 # https://gist.github.com/croxton/ebfb5f3ac143cd86542788f972434c96
-  openssl req -new -key ${temp_dir}/key.pem -out ${temp_dir}/csr.pem -subj "/CN=kryptonite.elements.com" -reqexts req_ext -config ${temp_dir}/ssl.conf
+  openssl req -new -key ${temp_dir}/key.pem -out ${temp_dir}/csr.pem -subj "/CN=${rogue_cert_name}.elements.com" -reqexts req_ext -config ${temp_dir}/ssl.conf
   openssl_negative_days=$(uname | grep -q Darwin && echo || echo -) # MacOS openssl doesn't support -ve days (for simulating expired certs)
   openssl x509 -req -in ${temp_dir}/csr.pem -signkey ${temp_dir}/key.pem -out ${temp_dir}/cert.pem -days ${openssl_negative_days}1 -extensions req_ext -extfile ${temp_dir}/ssl.conf
   kubectl create namespace demo-certs 2>/dev/null || true
-  kubectl -n demo-certs create secret tls kryptonite-elements-com-tls --cert=${temp_dir}/cert.pem --key=${temp_dir}/key.pem
+  kubectl -n demo-certs create secret tls ${rogue_cert_name}-elements-com-tls --cert=${temp_dir}/cert.pem --key=${temp_dir}/key.pem
 }
 
 discover-tls-secrets() {
