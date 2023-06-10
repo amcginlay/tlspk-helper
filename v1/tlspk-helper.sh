@@ -153,8 +153,8 @@ create-local-k8s-cluster() {
     amzn | ubuntu )
       log-info "Creating a new Kubernetes cluster using k3d on localhost"
       newgrp docker << EOF
-        if sudo lsof -i :443 > /dev/null 2>&1; then 
-          k3d cluster create ${TLSPK_CLUSTER_NAME} --wait # 443 TAKEN, NO LOADBALANCER
+        if sudo lsof -i :80 > /dev/null 2>&1 || sudo lsof -i :443 > /dev/null 2>&1; then 
+          k3d cluster create ${TLSPK_CLUSTER_NAME} --wait # 80/443 TAKEN, NO LOADBALANCER
         else
           k3d cluster create ${TLSPK_CLUSTER_NAME} --wait -p 80:80@loadbalancer -p 443:443@loadbalancer
         fi
