@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 
 SCRIPT_NAME="tlspk-helper.sh"
-SCRIPT_VERSION="0.1"
+SCRIPT_VERSION="2.0"
+
+VENCTL_VERSION_DEFAULT="1.2.1"              # https://gitlab.com/venafi/vaas/applications/tls-protect-for-k8s/venctl/-/releases
 AGENT_VERSION_DEFAULT="0.2.1"               # gcrane ls eu.gcr.io/jetstack-secure-enterprise/charts/jetstack-agent
 OPERATOR_VERSION_DEFAULT="v0.0.1-alpha.26"  # gcrane ls eu.gcr.io/jetstack-secure-enterprise/charts/js-operator
 KUBECTL_VERSION_DEFAULT="1.25.7/2023-03-17"
@@ -31,7 +33,7 @@ finally() {
 }
 
 check-vars() {
-  local required_vars=("TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET")
+  local required_vars=("TLSPK_SA_USER_ID" "TLSPK_SA_USER_SECRET" "VCP_REGION" "VCP_APIKEY")
   local missing_vars=()
   set +u # <<< allow test for potentially unbound variable
   for var in "${required_vars[@]}"; do
@@ -75,7 +77,7 @@ get-missing-package-dependencies() {
 }
 
 install-dependencies() {
-  local missing_packages=($(get-missing-package-dependencies "jq" "git" "kubectl" "helm" "docker" "k3d"))
+  local missing_packages=($(get-missing-package-dependencies "jq" "git" "gpg-agent" "kubectl" "helm" "docker" "k3d" "venctl"))
   if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-info "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     local os=$(get-os)
@@ -91,6 +93,10 @@ install-dependencies() {
         jq | git )
           sudo ${pm} update -y
           sudo ${pm} install ${package} -y
+          ;;
+        gpg-agent )
+          sudo ${pm} update -y
+          sudo ${pm} install gnupg2 -y --allowerasing # includes gpg-agent
           ;;
         kubectl )
           curl -O -s https://s3.us-west-2.amazonaws.com/amazon-eks/${KUBECTL_VERSION}/bin/$(uname | tr '[:upper:]' '[:lower:]')/amd64/kubectl
@@ -128,6 +134,9 @@ EOF
           ;;
         k3d )
           curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | K3D_INSTALL_DIR=/usr/bin bash
+          ;;
+        venctl )
+          curl -sSfL https://dl.venafi.cloud/venctl/latest/installer.sh | VERSION=${VENCTL_VERSION} sudo sh
           ;;
         * ) 
           log-error "Unrecognised package dependency: ${package}"
@@ -401,6 +410,16 @@ deploy-agent() {
   log-info "If TLSPK agent is running, this cluster will show in TLSPK as ${tlkps_cluster_name_adj}"
 }
 
+deploy-agent-v2() {
+  log-info "Installing agent using venctl ${VENCTL_VERSION}"
+  venctl installation cluster connect \
+    --name ${TLSPK_CLUSTER_NAME} \
+    --vcp-region ${VCP_REGION} \
+    --api-key ${VCP_APIKEY} \
+    --owning-team "Team Angus" \ # TODO need to fix this
+    --no-prompts
+}
+
 install-operator() {
   local missing_packages=($(get-missing-package-dependencies "kubectl" "helm"))
   if [[ ${#missing_packages[@]} -gt 0 ]]; then
@@ -525,6 +544,8 @@ usage() {
   echo "Environment Variables (REQUIRED):"
   echo "  TLSPK_SA_USER_ID           User ID of a TLSPK service account"
   echo "  TLSPK_SA_USER_SECRET       User Secret of a TLSPK service account (use single-quotes to preserve control chars!)"
+  echo "  VCP_URL                    Venafi Control Plane API Server"
+  echo "  VCP_APIKEY                 Venafi Control Plane API Key"
   echo
   echo "Available Commands:"
   echo "  install-dependencies       Installs ALL the package dependencies required by commands in this script (jq git kubectl helm docker k3d) "
@@ -533,6 +554,7 @@ usage() {
   echo "  create-local-k8s-cluster   Create a new k8s cluster on localhost (uses k3d)"
   echo "  discover-tls-secrets       Scan the current cluster for TLS secrets"
   echo "  deploy-agent               Deploys the TLSPK agent component"
+  echo "  deploy-agent-v2            Deploys the TLSPK agent component"
   echo "  install-operator           Installs the TLSPK operator"
   echo "  deploy-operator-components Deploys minimal operator components, incluing cert-manager"
   echo "  create-unsafe-tls-secrets  Define TLS Secrets in the demo-certs namespace (NOT protected by cert-manager)"
@@ -540,6 +562,7 @@ usage() {
   echo
   echo "Flags:"
   echo "  --auto-approve             Suppress prompts regarding potentially destructive operations"
+  echo "  --venctl-version <value>   Optional for deploy-agent-v2 (default is ${VENCTL_VERSION_DEFAULT})"
   echo "  --agent-version <value>    Optional for deploy-agent (default is ${AGENT_VERSION_DEFAULT})"
   echo "  --operator-version <value> Optional for install-operator (default is ${OPERATOR_VERSION_DEFAULT})"
   echo "  --kubectl-version <value>  Optional (default is ${KUBECTL_VERSION_DEFAULT})"
@@ -570,6 +593,7 @@ while [[ $# -gt 0 ]]; do
     create-local-k8s-cluster | \
     discover-tls-secrets | \
     deploy-agent | \
+    deploy-agent-v2 | \
     install-operator | \
     deploy-operator-components | \
     create-unsafe-tls-secrets | \
@@ -578,6 +602,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --auto-approve )
       : ${APPROVED:="y"}
+      ;;
+    --venctl-version )
+      shift
+      : ${VENCTL_VERSION:="${1}"}
       ;;
     --operator-version )
       shift
@@ -599,6 +627,7 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+: ${VENCTL_VERSION:=${VENCTL_VERSION_DEFAULT}}
 : ${AGENT_VERSION:=${AGENT_VERSION_DEFAULT}}
 : ${OPERATOR_VERSION:=${OPERATOR_VERSION_DEFAULT}}
 : ${KUBECTL_VERSION:=${KUBECTL_VERSION_DEFAULT}}
@@ -618,4 +647,3 @@ if ! ${COMMAND}; then
   log-error "${COMMAND} failed"
   exit 1
 fi
-
