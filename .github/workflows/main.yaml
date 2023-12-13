@@ -31,3 +31,5 @@ jobs:
         aws s3 cp v1/cfn-tlspk-cluster-bootstrapper.yaml  s3://venafi-ecosystem/tlspk/v1/
         aws s3 cp v1/cfn-tlspk-clusters-bootstrapper.yaml s3://venafi-ecosystem/tlspk/v1/
         aws s3 cp v1/tlspk-helper.sh                      s3://venafi-ecosystem/tlspk/v1/
+        aws s3 cp v2/cfn-tlspk-cluster-bootstrapper.yaml  s3://venafi-ecosystem/tlspk/v2/
+        aws s3 cp v2/tlspk-helper.sh                      s3://venafi-ecosystem/tlspk/v2/

@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: https://venafi-ecosystem.s3.amazonaws.com/tlspk/v1/cfn-tlspk-cluster-bootstrapper.yaml
+Parameters:
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    Description: Resolves to the latest Amazon Linux AMI from the selected region (DO NOT CHANGE).
+  InstanceType:
+    Type: String
+    Default: m5.large
+    AllowedValues:
+      - t2.micro
+      - m5.large
+    Description: Determines available RAM and CPU of each underlying EC2 instance.
+  EcosystemBucket:
+    Type: String
+    Default: venafi-ecosystem
+    Description: Indicates how to resolve https://${EcosystemBucket}.s3.amazonaws.com/tlspk/v1/tlspk-helper.sh.
+  TLSPKSAUserId:
+    Type: String
+    AllowedPattern : '.+'
+    Description: A TLS Protect For Kubernetes service account User ID as listed at https://platform.jetstack.io/org/ORGANIZATION/manage/service_accounts.
+  TLSPKSAUserSecret:
+    Type: String
+    NoEcho: true
+    AllowedPattern : '.+'
+    Description: The matching Secret for the provided TLS Protect For Kubernetes service account User ID
+
+Resources:
+  SSHSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable SSH access
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+  K8sCluster:
+    Type: AWS::EC2::Instance
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: "PT10M"
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      SecurityGroupIds:
+        - !Ref SSHSecurityGroup # enable EC2 Instance Connect
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/usr/bin/env bash
+            su ec2-user << EOF
+              catch() {
+                /opt/aws/bin/cfn-signal -e 1 --stack ${AWS::StackName} --resource K8sCluster --region ${AWS::Region}
+                exit 1
+              }
+              trap "catch" ERR
+              set -eu
+
+              cd
+              export TLSPK_SA_USER_ID=${TLSPKSAUserId}
+              export TLSPK_SA_USER_SECRET='$(sed 's/\$/_DOLLAR_/g' <<< '${TLSPKSAUserSecret}')'
+              export TLSPK_CLUSTER_NAME=$(cut -c-17 <<< ${AWS::StackName})-$(cut -c-13 <<< $(date +"%y%m%d%H%M%N")) # date suffixed to ensure TLSPK doesn't consider it a dupe
+              curl -fsSLO https://${EcosystemBucket}.s3.amazonaws.com/tlspk/v2/tlspk-helper.sh && chmod 700 tlspk-helper.sh
+
+              ./tlspk-helper.sh install-dependencies       --auto-approve
+              ./tlspk-helper.sh create-local-k8s-cluster   --auto-approve
+              ./tlspk-helper.sh deploy-agent               --auto-approve
+              ./tlspk-helper.sh install-operator           --auto-approve
+              ./tlspk-helper.sh deploy-operator-components --auto-approve
+              ./tlspk-helper.sh create-unsafe-tls-secrets  --auto-approve
+              ./tlspk-helper.sh create-safe-tls-secrets    --auto-approve
+
+              /opt/aws/bin/cfn-signal -e 0 --stack ${AWS::StackName} --resource K8sCluster --region ${AWS::Region}
+            EOF
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}
