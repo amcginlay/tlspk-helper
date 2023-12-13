@@ -618,3 +618,4 @@ if ! ${COMMAND}; then
   log-error "${COMMAND} failed"
   exit 1
 fi
+
