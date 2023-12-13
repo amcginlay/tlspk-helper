@@ -1,4 +1,4 @@
-# tlspk-helper (Moved to Venafi CoolSolutions)
+# tlspk-helper (In the process of moving this to Venafi CoolSolutions)
 
 ```
 # on MacOS
@@ -8,10 +8,8 @@ bucket=venafi-ecosystem-dev # drop the "-dev" as appropriate
 
 while true; do
   notifywait .
-  aws s3 cp tlspk-helper.README.txt                 s3://${bucket}/tlspk/
-  aws s3 cp v1/cfn-tlspk-cluster-bootstrapper.yaml  s3://${bucket}/tlspk/v1/
-  aws s3 cp v1/cfn-tlspk-cluster-bootstrappers.yaml s3://${bucket}/tlspk/v1/
-  aws s3 cp v1/tlspk-helper.sh                      s3://${bucket}/tlspk/v1/
+  aws s3 cp v2/cfn-tlspk-cluster-bootstrapper.yaml  s3://${bucket}/tlspk/v2/
+  aws s3 cp v2/tlspk-helper.sh                      s3://${bucket}/tlspk/v2/
 done
 ```
 
