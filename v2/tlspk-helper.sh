@@ -411,12 +411,22 @@ deploy-agent() {
 }
 
 deploy-agent-v2() {
+  local team=k8s-cluster-discovery-demo-team
+
+  log-info "Ensuring ${team} exists"
+  curl -X POST https://api.venafi.cloud/v1/teams \
+    --no-progress-meter \
+    -H "accept: application/json" \
+    -H "tppl-api-key: ${VCP_APIKEY}" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\":\"${team}\",\"members\":[],\"owners\":[],\"role\":\"SYSTEM_ADMIN\",\"userMatchingRules\":[]}"
+
   log-info "Installing agent using venctl ${VENCTL_VERSION}"
   venctl installation cluster connect \
     --name ${TLSPK_CLUSTER_NAME} \
     --vcp-region ${VCP_REGION} \
     --api-key ${VCP_APIKEY} \
-    --owning-team "Team Angus" \ # TODO need to fix this
+    --owning-team ${team} \
     --no-prompts
 }
 
