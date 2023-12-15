@@ -65,6 +65,12 @@ get-package-manager() {
   return 1
 }
 
+get-regional-url() {
+  grep -q "US" <<< ${VCP_REGION} && echo "api.venafi.cloud" && return
+  grep -q "EU" <<< ${VCP_REGION} && echo "api.venafi.eu" && return
+  log-error "Unsupported Region: VCP_REGION=${VCP_REGION}. Supported regions are US and EU" 
+}
+
 get-missing-package-dependencies() {
   local required=("$@")
   local missing=()
@@ -411,22 +417,33 @@ deploy-agent() {
 }
 
 deploy-agent-v2() {
-  local team=k8s-cluster-discovery-demo-team
+  local owning_team=k8s-cluster-discovery-demo-team
 
-  log-info "Ensuring ${team} exists"
-  curl -X POST https://api.venafi.cloud/v1/teams \
-    --no-progress-meter \
-    -H "accept: application/json" \
-    -H "tppl-api-key: ${VCP_APIKEY}" \
-    -H "Content-Type: application/json" \
-    -d "{\"name\":\"${team}\",\"members\":[],\"owners\":[],\"role\":\"SYSTEM_ADMIN\",\"userMatchingRules\":[]}"
+  log-info "Ensuring ${owning_team} is available in VCP"
+  local url=https://$(get-regional-url)/v1/teams
+  if [ "$(curl -X GET ${url} \
+            --no-progress-meter \
+            -H "accept: application/json" \
+            -H "tppl-api-key: ${VCP_APIKEY}" \
+            -H "Content-Type: application/json" | jq --arg t "${owning_team}" '.teams | all(.name != $t)')" = "true" ]; then
+    log-info "${owning_team} missing, creating ..."
+    curl -X POST ${url} \
+      --no-progress-meter \
+      -H "accept: application/json" \
+      -H "tppl-api-key: ${VCP_APIKEY}" \
+      -H "Content-Type: application/json" \
+      -d "{\"name\":\"${owning_team}\",\"members\":[],\"owners\":[],\"role\":\"SYSTEM_ADMIN\",\"userMatchingRules\":[]}"
+    log-info "${owning_team} successfully created"
+  else
+    log-info "${owning_team} already present, not creating"
+  fi
 
   log-info "Installing agent using venctl ${VENCTL_VERSION}"
   venctl installation cluster connect \
     --name ${TLSPK_CLUSTER_NAME} \
     --vcp-region ${VCP_REGION} \
     --api-key ${VCP_APIKEY} \
-    --owning-team ${team} \
+    --owning-team ${owning_team} \
     --no-prompts
 }
 
@@ -554,7 +571,7 @@ usage() {
   echo "Environment Variables (REQUIRED):"
   echo "  TLSPK_SA_USER_ID           User ID of a TLSPK service account"
   echo "  TLSPK_SA_USER_SECRET       User Secret of a TLSPK service account (use single-quotes to preserve control chars!)"
-  echo "  VCP_URL                    Venafi Control Plane API Server"
+  echo "  VCP_REGION                 Venafi Control Plane API Region (US or EU)"
   echo "  VCP_APIKEY                 Venafi Control Plane API Key"
   echo
   echo "Available Commands:"
