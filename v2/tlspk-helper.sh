@@ -6,7 +6,8 @@ AGENT_VERSION_DEFAULT="0.2.1"               # (legacy) gcrane ls eu.gcr.io/jetst
 OPERATOR_VERSION_DEFAULT="v0.0.1-alpha.26"  # (legacy) gcrane ls eu.gcr.io/jetstack-secure-enterprise/charts/js-operator
 
 KUBECTL_VERSION_DEFAULT="1.27.7/2023-11-14"
-VENCTL_VERSION_DEFAULT="1.3.0"              # https://gitlab.com/venafi/vaas/applications/tls-protect-for-k8s/venctl/-/releases
+K3D_IMAGE_VERSION_DEFAULT="v1.27.4-k3s1"    # from https://hub.docker.com/r/rancher/k3s/tags
+VENCTL_VERSION_DEFAULT="1.3.0"              # from https://gitlab.com/venafi/vaas/applications/tls-protect-for-k8s/venctl/-/releases
 CERT_MANAGER_VERSION_DEFAULT="v1.13.3"
 VEI_VERSION_DEFAULT="v0.11.0"
 OWNING_TEAM=k8s-cluster-discovery-demo-team
@@ -172,9 +173,9 @@ create-local-k8s-cluster() {
       log-info "Creating a new Kubernetes cluster using k3d on localhost"
       newgrp docker << EOF
         if sudo lsof -i :80 > /dev/null 2>&1 || sudo lsof -i :443 > /dev/null 2>&1; then 
-          k3d cluster create ${TLSPK_CLUSTER_NAME} --wait # 80/443 TAKEN, NO LOADBALANCER
+          k3d cluster create ${TLSPK_CLUSTER_NAME} --image k3s:${K3D_IMAGE_VERSION}  --wait # 80/443 TAKEN, NO LOADBALANCER
         else
-          k3d cluster create ${TLSPK_CLUSTER_NAME} --wait -p 80:80@loadbalancer -p 443:443@loadbalancer
+          k3d cluster create ${TLSPK_CLUSTER_NAME} --image k3s:${K3D_IMAGE_VERSION}  --wait -p 80:80@loadbalancer -p 443:443@loadbalancer
         fi
         k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
 EOF
@@ -616,6 +617,7 @@ usage() {
   echo "Flags:"
   echo "  --auto-approve                 Suppress prompts regarding potentially destructive operations"
   echo "  --kubectl-version <value>      Optional (default is ${KUBECTL_VERSION_DEFAULT})"
+  echo "  --k3d-image-version <value>    Optional from https://hub.docker.com/r/rancher/k3s/tags (default is ${K3D_IMAGE_VERSION_DEFAULT})"
   echo "  --venctl-version <value>       Optional for v2 operations (default is ${VENCTL_VERSION_DEFAULT})"
   echo "  --cert-manager-version <value> Optional for v2 operations (default is ${CERT_MANAGER_VERSION_DEFAULT})"
   echo "  --vei-version <value>          Optional for v2 operations (default is ${VEI_VERSION_DEFAULT})"
@@ -663,6 +665,10 @@ while [[ $# -gt 0 ]]; do
       shift
       : ${KUBECTL_VERSION:="${1}"}
       ;;
+    --k3d-image-version )
+      shift
+      : ${K3D_IMAGE_VERSION:="${1}"}
+      ;;
     --venctl-version )
       shift
       : ${VENCTL_VERSION:="${1}"}
@@ -692,6 +698,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 : ${KUBECTL_VERSION:=${KUBECTL_VERSION_DEFAULT}}
+: ${K3D_IMAGE_VERSION:=${K3D_IMAGE_VERSION_DEFAULT}}
 : ${VENCTL_VERSION:=${VENCTL_VERSION_DEFAULT}}
 : ${CERT_MANAGER_VERSION:=${CERT_MANAGER_VERSION_DEFAULT}}
 : ${VEI_VERSION:=${VEI_VERSION_DEFAULT}}
