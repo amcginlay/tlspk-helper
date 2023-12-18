@@ -173,9 +173,9 @@ create-local-k8s-cluster() {
       log-info "Creating a new Kubernetes cluster using k3d on localhost"
       newgrp docker << EOF
         if sudo lsof -i :80 > /dev/null 2>&1 || sudo lsof -i :443 > /dev/null 2>&1; then 
-          k3d cluster create ${TLSPK_CLUSTER_NAME} --image k3s:${K3D_IMAGE_VERSION}  --wait # 80/443 TAKEN, NO LOADBALANCER
+          k3d cluster create ${TLSPK_CLUSTER_NAME} --image rancher/k3s:${K3D_IMAGE_VERSION} --wait # 80/443 TAKEN, NO LOADBALANCER
         else
-          k3d cluster create ${TLSPK_CLUSTER_NAME} --image k3s:${K3D_IMAGE_VERSION}  --wait -p 80:80@loadbalancer -p 443:443@loadbalancer
+          k3d cluster create ${TLSPK_CLUSTER_NAME} --image rancher/k3s:${K3D_IMAGE_VERSION} --wait -p 80:80@loadbalancer -p 443:443@loadbalancer
         fi
         k3d kubeconfig merge ${TLSPK_CLUSTER_NAME} --kubeconfig-merge-default --kubeconfig-switch-context
 EOF
