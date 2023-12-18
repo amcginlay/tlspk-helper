@@ -5,12 +5,17 @@ SCRIPT_VERSION="2.0"
 AGENT_VERSION_DEFAULT="0.2.1"               # (legacy) gcrane ls eu.gcr.io/jetstack-secure-enterprise/charts/jetstack-agent
 OPERATOR_VERSION_DEFAULT="v0.0.1-alpha.26"  # (legacy) gcrane ls eu.gcr.io/jetstack-secure-enterprise/charts/js-operator
 
-KUBECTL_VERSION_DEFAULT="1.27.7/2023-11-14"
+KUBECTL_VERSION_DEFAULT="1.27.7/2023-11-14" # from https://s3.console.aws.amazon.com/s3/buckets/amazon-eks
+VCERT_VERSION_DEFAULT="5.2.1"               # from https://github.com/venafi/vcert/releases
 K3D_IMAGE_VERSION_DEFAULT="v1.27.4-k3s1"    # from https://hub.docker.com/r/rancher/k3s/tags
 VENCTL_VERSION_DEFAULT="1.3.0"              # from https://gitlab.com/venafi/vaas/applications/tls-protect-for-k8s/venctl/-/releases
 CERT_MANAGER_VERSION_DEFAULT="v1.13.3"
 VEI_VERSION_DEFAULT="v0.11.0"
 OWNING_TEAM=k8s-cluster-discovery-demo-team
+
+DOMAIN="container-gulch"
+VCP_ZONE_APP=${DOMAIN}
+VCP_ZONE_CIT="Default"                      # pristine VCP tenants always start with a 'Default' CIT (Built-In CA)
 
 MISSING_ENV_VAR_MSG="The following REQUIRED environment variables are missing:"
 MISSING_PACKAGE_DEPENDENCIES_MSG="The following REQUIRED package dependencies are missing:"
@@ -87,7 +92,7 @@ get-missing-package-dependencies() {
 }
 
 install-dependencies() {
-  local missing_packages=($(get-missing-package-dependencies "jq" "git" "gpg-agent" "kubectl" "helm" "docker" "k3d" "venctl"))
+  local missing_packages=($(get-missing-package-dependencies "jq" "git" "gpg-agent" "kubectl" "helm" "docker" "k3d" "vcert" "venctl"))
   if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-info "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
     local os=$(get-os)
@@ -144,6 +149,12 @@ EOF
           ;;
         k3d )
           curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | K3D_INSTALL_DIR=/usr/bin bash
+          ;;
+        vcert )
+          curl -fsSL -o ${temp_dir}/vcert.zip https://github.com/Venafi/vcert/releases/download/v${VCERT_VERSION}/vcert_v${VCERT_VERSION}_linux.zip
+          unzip ${temp_dir}/vcert.zip -d ${temp_dir}
+          chmod +x ${temp_dir}/vcert
+          sudo mv ${temp_dir}/vcert /usr/bin/
           ;;
         venctl )
           curl -sSfL https://dl.venafi.cloud/venctl/latest/installer.sh | VERSION=${VENCTL_VERSION} sudo sh
@@ -523,20 +534,70 @@ deploy-components-v2() {
     --api-key ${VCP_APIKEY} \
     --owning-team ${OWNING_TEAM} \
     --no-prompts \
-    --image-pull-secret-file venafi_registry_docker_config.json \
+    --image-pull-secret-file ${temp_dir}/dockerconfig.json \
     --image-pull-secret-format dockerconfig \
     --scopes enterprise-cert-manager,enterprise-venafi-issuer,enterprise-approver-policy \
   
   log-info "Storing image pull secret in local cluster"
   kubectl create namespace venafi 2>/dev/null || true
   kubectl -n venafi create secret docker-registry venafi-image-pull-secret \
-    --from-file .dockerconfigjson=venafi_registry_docker_config.json
+    --from-file .dockerconfigjson=${temp_dir}/dockerconfig.json
 
   log-info "Installing components using venctl ${VENCTL_VERSION} (cert-manager=${CERT_MANAGER_VERSION} vei=${VEI_VERSION})"
   venctl components kubernetes manifest generate \
     --cert-manager --cert-manager-version ${CERT_MANAGER_VERSION} \
     --venafi-enhanced-issuer --venafi-enhanced-issuer-version ${VEI_VERSION} | \
     venctl components kubernetes manifest tool sync -f -
+}
+
+create-issuers-v2() {
+  local vcp_url=$(get-regional-url)
+  # TODO get VEI & Digicert working for container-gulch (if necessary!)
+  log-info "Setting minimal policy (Application/CertificateIssuingTemplate pair) in VCP"
+  cat <<EOF > ${temp_dir}/policy.json
+  {
+    "policy": {
+      "certificateAuthority": "BUILTIN\\\\Built-In CA\\\\Default Product",
+      "keyPair": {
+        "serviceGenerated": false
+      }
+    }
+  }
+EOF
+  vcert setpolicy \
+    --apiKey ${VCP_APIKEY} \
+    --url ${vcp_url} \
+    --zone ${VCP_ZONE_APP}\\${VCP_ZONE_CIT} \
+    --file ${temp_dir}/policy.json
+
+  log-info "Deploying self-signed cert-manager issuer" # independent of VCP
+  cat << EOF | kubectl apply -f -
+  apiVersion: cert-manager.io/v1
+  kind: ClusterIssuer
+  metadata:
+    name: self-signed
+  spec:
+    selfSigned: {}
+EOF
+
+  log-info "Deploying Venafi TLS Protect Cloud native cert-manager issuer" # requires VCP credentials
+  kubectl create namespace venafi 2>/dev/null || true
+  kubectl -n venafi delete secret vcp-credentials 2>/dev/null
+  kubectl -n venafi create secret generic vcp-credentials --from-literal=api-key=${VCP_APIKEY}
+  cat << EOF | kubectl apply -f -
+  apiVersion: cert-manager.io/v1
+  kind: ClusterIssuer
+  metadata:
+    name: ven-native-issuer
+  spec:
+    venafi:
+      zone: ${VCP_ZONE_APP}\\${VCP_ZONE_CIT}
+      cloud:
+        url: ${vcp_url}
+        apiTokenSecretRef:
+          name: vcp-credentials
+          key: api-key
+EOF
 }
 
 create-safe-tls-secrets() {
@@ -611,6 +672,7 @@ usage() {
   echo "  deploy-operator-components Deploys minimal operator components, incluing cert-manager (legacy)"
   echo "  deploy-agent-v2            Deploys the TLSPK agent component"
   echo "  deploy-components-v2       Installs the TLSPK components"
+  echo "  create-issuers-v2          one self-signed, one native Venafi Cloud (VCP_APIKEY required)"
   echo "  create-unsafe-tls-secrets  Define TLS Secrets in the demo-certs namespace (NOT protected by cert-manager)"
   echo "  create-safe-tls-secrets    Use cert-manager Certificate CRD to define a collection of self-signed certificates in the demo-certs namespace"
   echo
@@ -618,6 +680,7 @@ usage() {
   echo "  --auto-approve                 Suppress prompts regarding potentially destructive operations"
   echo "  --kubectl-version <value>      Optional (default is ${KUBECTL_VERSION_DEFAULT})"
   echo "  --k3d-image-version <value>    Optional from https://hub.docker.com/r/rancher/k3s/tags (default is ${K3D_IMAGE_VERSION_DEFAULT})"
+  echo "  --vcert-version <value>        Optional from https://github.com/venafi/vcert/releases (default is ${VCERT_VERSION_DEFAULT})"
   echo "  --venctl-version <value>       Optional for v2 operations (default is ${VENCTL_VERSION_DEFAULT})"
   echo "  --cert-manager-version <value> Optional for v2 operations (default is ${CERT_MANAGER_VERSION_DEFAULT})"
   echo "  --vei-version <value>          Optional for v2 operations (default is ${VEI_VERSION_DEFAULT})"
@@ -654,6 +717,7 @@ while [[ $# -gt 0 ]]; do
     deploy-operator-components | \
     deploy-agent-v2 | \
     deploy-components-v2 | \
+    create-issuers-v2 | \
     create-unsafe-tls-secrets | \
     create-safe-tls-secrets )
       COMMAND=$1
@@ -668,6 +732,10 @@ while [[ $# -gt 0 ]]; do
     --k3d-image-version )
       shift
       : ${K3D_IMAGE_VERSION:="${1}"}
+      ;;
+    --vcert-version )
+      shift
+      : ${VCERT_VERSION:="${1}"}
       ;;
     --venctl-version )
       shift
@@ -703,6 +771,7 @@ done
 
 : ${KUBECTL_VERSION:=${KUBECTL_VERSION_DEFAULT}}
 : ${K3D_IMAGE_VERSION:=${K3D_IMAGE_VERSION_DEFAULT}}
+: ${VCERT_VERSION:=${VCERT_VERSION_DEFAULT}}
 : ${VENCTL_VERSION:=${VENCTL_VERSION_DEFAULT}}
 : ${CERT_MANAGER_VERSION:=${CERT_MANAGER_VERSION_DEFAULT}}
 : ${VEI_VERSION:=${VEI_VERSION_DEFAULT}}

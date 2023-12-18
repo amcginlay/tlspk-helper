@@ -78,6 +78,7 @@ Resources:
               ./tlspk-helper.sh create-local-k8s-cluster   --auto-approve
               ./tlspk-helper.sh deploy-agent-v2            --auto-approve
               ./tlspk-helper.sh deploy-components-v2       --auto-approve
+              ./tlspk-helper.sh create-issuers-v2          --auto-approve
 
               /opt/aws/bin/cfn-signal -e 0 --stack ${AWS::StackName} --resource K8sCluster --region ${AWS::Region}
             EOF
