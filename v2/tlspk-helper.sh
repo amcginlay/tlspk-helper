@@ -2,11 +2,14 @@
 
 SCRIPT_NAME="tlspk-helper.sh"
 SCRIPT_VERSION="2.0"
+AGENT_VERSION_DEFAULT="0.2.1"               # (legacy) gcrane ls eu.gcr.io/jetstack-secure-enterprise/charts/jetstack-agent
+OPERATOR_VERSION_DEFAULT="v0.0.1-alpha.26"  # (legacy) gcrane ls eu.gcr.io/jetstack-secure-enterprise/charts/js-operator
 
-VENCTL_VERSION_DEFAULT="1.2.1"              # https://gitlab.com/venafi/vaas/applications/tls-protect-for-k8s/venctl/-/releases
-AGENT_VERSION_DEFAULT="0.2.1"               # gcrane ls eu.gcr.io/jetstack-secure-enterprise/charts/jetstack-agent
-OPERATOR_VERSION_DEFAULT="v0.0.1-alpha.26"  # gcrane ls eu.gcr.io/jetstack-secure-enterprise/charts/js-operator
-KUBECTL_VERSION_DEFAULT="1.25.7/2023-03-17"
+KUBECTL_VERSION_DEFAULT="1.27.7/2023-11-14"
+VENCTL_VERSION_DEFAULT="1.3.0"              # https://gitlab.com/venafi/vaas/applications/tls-protect-for-k8s/venctl/-/releases
+CERT_MANAGER_VERSION_DEFAULT="v1.13.3"
+VEI_VERSION_DEFAULT="v0.11.0"
+OWNING_TEAM=k8s-cluster-discovery-demo-team
 
 MISSING_ENV_VAR_MSG="The following REQUIRED environment variables are missing:"
 MISSING_PACKAGE_DEPENDENCIES_MSG="The following REQUIRED package dependencies are missing:"
@@ -381,7 +384,7 @@ check-deployed() {
   return 1 # not an error, but still an exit condition
 }
 
-deploy-agent() {
+deploy-agent() { # (legacy)
   local missing_packages=($(get-missing-package-dependencies "kubectl" "helm"))
   if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
@@ -416,38 +419,7 @@ deploy-agent() {
   log-info "If TLSPK agent is running, this cluster will show in TLSPK as ${tlkps_cluster_name_adj}"
 }
 
-deploy-agent-v2() {
-  local owning_team=k8s-cluster-discovery-demo-team
-
-  log-info "Ensuring ${owning_team} is available in VCP"
-  local url=https://$(get-regional-url)/v1/teams
-  if [ "$(curl -X GET ${url} \
-            --no-progress-meter \
-            -H "accept: application/json" \
-            -H "tppl-api-key: ${VCP_APIKEY}" \
-            -H "Content-Type: application/json" | jq --arg t "${owning_team}" '.teams | all(.name != $t)')" = "true" ]; then
-    log-info "${owning_team} missing, creating ..."
-    curl -X POST ${url} \
-      --no-progress-meter \
-      -H "accept: application/json" \
-      -H "tppl-api-key: ${VCP_APIKEY}" \
-      -H "Content-Type: application/json" \
-      -d "{\"name\":\"${owning_team}\",\"members\":[],\"owners\":[],\"role\":\"SYSTEM_ADMIN\",\"userMatchingRules\":[]}"
-    log-info "${owning_team} successfully created"
-  else
-    log-info "${owning_team} already present, not creating"
-  fi
-
-  log-info "Installing agent using venctl ${VENCTL_VERSION}"
-  venctl installation cluster connect \
-    --name ${TLSPK_CLUSTER_NAME} \
-    --vcp-region ${VCP_REGION} \
-    --api-key ${VCP_APIKEY} \
-    --owning-team ${owning_team} \
-    --no-prompts
-}
-
-install-operator() {
+install-operator() { # (legacy)
   local missing_packages=($(get-missing-package-dependencies "kubectl" "helm"))
   if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
@@ -478,7 +450,7 @@ install-operator() {
   sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=300s
 }
 
-deploy-operator-components() {
+deploy-operator-components() { # (legacy)
   local missing_packages=($(get-missing-package-dependencies "kubectl"))
   if [[ ${#missing_packages[@]} -gt 0 ]]; then
     log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
@@ -511,6 +483,59 @@ EOF
   sleep 5 && kubectl -n jetstack-secure wait --for=condition=Available=True --all deployments --timeout=300s
   kubectl -n jetstack-secure wait pod -l app=cert-manager --for=condition=Ready --timeout=300s
   kubectl -n jetstack-secure wait pod -l app=webhook --for=condition=Ready --timeout=300s
+}
+
+deploy-agent-v2() {
+  log-info "Ensuring ${OWNING_TEAM} is available in VCP"
+  local url=https://$(get-regional-url)/v1/teams
+  if [ "$(curl -X GET ${url} \
+            --no-progress-meter \
+            -H "accept: application/json" \
+            -H "tppl-api-key: ${VCP_APIKEY}" \
+            -H "Content-Type: application/json" | jq --arg t "${OWNING_TEAM}" '.teams | all(.name != $t)')" = "true" ]; then
+    log-info "${OWNING_TEAM} missing, creating ..."
+    curl -X POST ${url} \
+      --no-progress-meter \
+      -H "accept: application/json" \
+      -H "tppl-api-key: ${VCP_APIKEY}" \
+      -H "Content-Type: application/json" \
+      -d "{\"name\":\"${OWNING_TEAM}\",\"members\":[],\"owners\":[],\"role\":\"SYSTEM_ADMIN\",\"userMatchingRules\":[]}"
+    log-info "${OWNING_TEAM} successfully created"
+  else
+    log-info "${OWNING_TEAM} already present, not creating"
+  fi
+
+  log-info "Installing agent using venctl ${VENCTL_VERSION}"
+  venctl installation cluster connect \
+    --name ${TLSPK_CLUSTER_NAME} \
+    --vcp-region ${VCP_REGION} \
+    --api-key ${VCP_APIKEY} \
+    --owning-team ${OWNING_TEAM} \
+    --no-prompts
+}
+
+deploy-components-v2() {
+  log-info "Ensuring image pull secret is available in VCP"
+  venctl iam service-account registry create \
+    --name ${TLSPK_CLUSTER_NAME}-ips \
+    --vcp-region ${VCP_REGION} \
+    --api-key ${VCP_APIKEY} \
+    --owning-team ${OWNING_TEAM} \
+    --no-prompts \
+    --image-pull-secret-file venafi_registry_docker_config.json \
+    --image-pull-secret-format dockerconfig \
+    --scopes enterprise-cert-manager,enterprise-venafi-issuer,enterprise-approver-policy \
+  
+  log-info "Storing image pull secret in local cluster"
+  kubectl create namespace venafi 2>/dev/null || true
+  kubectl -n venafi create secret docker-registry venafi-image-pull-secret \
+    --from-file .dockerconfigjson=venafi_registry_docker_config.json
+
+  log-info "Installing components using venctl ${VENCTL_VERSION} (cert-manager=${CERT_MANAGER_VERSION} vei=${VEI_VERSION})"
+  venctl components kubernetes manifest generate \
+    --cert-manager --cert-manager-version ${CERT_MANAGER_VERSION} \
+    --venafi-enhanced-issuer --venafi-enhanced-issuer-version ${VEI_VERSION} | \
+    venctl components kubernetes manifest tool sync -f -
 }
 
 create-safe-tls-secrets() {
@@ -580,20 +605,23 @@ usage() {
   echo "  get-dockerconfig           Obtains Docker-compatible registry config / image pull secret (as used with 'helm upgrade --registry-config')"
   echo "  create-local-k8s-cluster   Create a new k8s cluster on localhost (uses k3d)"
   echo "  discover-tls-secrets       Scan the current cluster for TLS secrets"
-  echo "  deploy-agent               Deploys the TLSPK agent component"
+  echo "  deploy-agent               Deploys the TLSPK agent component (legacy)"
+  echo "  install-operator           Installs the TLSPK operator (legacy)"
+  echo "  deploy-operator-components Deploys minimal operator components, incluing cert-manager (legacy)"
   echo "  deploy-agent-v2            Deploys the TLSPK agent component"
-  echo "  install-operator           Installs the TLSPK operator"
-  echo "  deploy-operator-components Deploys minimal operator components, incluing cert-manager"
+  echo "  deploy-components-v2       Installs the TLSPK components"
   echo "  create-unsafe-tls-secrets  Define TLS Secrets in the demo-certs namespace (NOT protected by cert-manager)"
   echo "  create-safe-tls-secrets    Use cert-manager Certificate CRD to define a collection of self-signed certificates in the demo-certs namespace"
   echo
   echo "Flags:"
-  echo "  --auto-approve             Suppress prompts regarding potentially destructive operations"
-  echo "  --venctl-version <value>   Optional for deploy-agent-v2 (default is ${VENCTL_VERSION_DEFAULT})"
-  echo "  --agent-version <value>    Optional for deploy-agent (default is ${AGENT_VERSION_DEFAULT})"
-  echo "  --operator-version <value> Optional for install-operator (default is ${OPERATOR_VERSION_DEFAULT})"
-  echo "  --kubectl-version <value>  Optional (default is ${KUBECTL_VERSION_DEFAULT})"
-  echo "  --cluster-name <value>     Optional for create-local-k8s-cluster (default is autogenerated or derived from 'kubectl config current-context')"
+  echo "  --auto-approve                 Suppress prompts regarding potentially destructive operations"
+  echo "  --kubectl-version <value>      Optional (default is ${KUBECTL_VERSION_DEFAULT})"
+  echo "  --venctl-version <value>       Optional for v2 operations (default is ${VENCTL_VERSION_DEFAULT})"
+  echo "  --cert-manager-version <value> Optional for v2 operations (default is ${CERT_MANAGER_VERSION_DEFAULT})"
+  echo "  --vei-version <value>          Optional for v2 operations (default is ${VEI_VERSION_DEFAULT})"
+  echo "  --cluster-name <value>         Optional for create-local-k8s-cluster (default is autogenerated or derived from 'kubectl config current-context')"
+  echo "  --agent-version <value>        (legacy) Optional for deploy-agent (default is ${AGENT_VERSION_DEFAULT})"
+  echo "  --operator-version <value>     (legacy) Optional for install-operator (default is ${OPERATOR_VERSION_DEFAULT})"
 }
 
 # ----- MAIN -----
@@ -620,9 +648,10 @@ while [[ $# -gt 0 ]]; do
     create-local-k8s-cluster | \
     discover-tls-secrets | \
     deploy-agent | \
-    deploy-agent-v2 | \
     install-operator | \
     deploy-operator-components | \
+    deploy-agent-v2 | \
+    deploy-components-v2 | \
     create-unsafe-tls-secrets | \
     create-safe-tls-secrets )
       COMMAND=$1
@@ -630,17 +659,25 @@ while [[ $# -gt 0 ]]; do
     --auto-approve )
       : ${APPROVED:="y"}
       ;;
+    --kubectl-version )
+      shift
+      : ${KUBECTL_VERSION:="${1}"}
+      ;;
     --venctl-version )
       shift
       : ${VENCTL_VERSION:="${1}"}
       ;;
-    --operator-version )
+    --cert-manager-version )
+      shift
+      : ${CERT_MANAGER_VERSION:="${1}"}
+      ;;
+    --vei-version )
+      shift
+      : ${VEI_VERSION:="${1}"}
+      ;;
+    --operator-version ) # (legacy)
       shift
       : ${OPERATOR_VERSION:="${1}"}
-      ;;
-    --kubectl-version )
-      shift
-      : ${KUBECTL_VERSION:="${1}"}
       ;;
     --cluster-name )
       shift
@@ -654,10 +691,12 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+: ${KUBECTL_VERSION:=${KUBECTL_VERSION_DEFAULT}}
 : ${VENCTL_VERSION:=${VENCTL_VERSION_DEFAULT}}
+: ${CERT_MANAGER_VERSION:=${CERT_MANAGER_VERSION_DEFAULT}}
+: ${VEI_VERSION:=${VEI_VERSION_DEFAULT}}
 : ${AGENT_VERSION:=${AGENT_VERSION_DEFAULT}}
 : ${OPERATOR_VERSION:=${OPERATOR_VERSION_DEFAULT}}
-: ${KUBECTL_VERSION:=${KUBECTL_VERSION_DEFAULT}}
 
 if ! [[ "${COMMAND}" == "create-local-k8s-cluster" ]] && kubectl config current-context >/dev/null 2>&1; then
   : ${TLSPK_CLUSTER_NAME:=$(kubectl config current-context | tr '@' '.' | cut -c-21)-$(date +"%y%m%d%H%M")}
