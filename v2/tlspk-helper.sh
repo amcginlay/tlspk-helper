@@ -681,6 +681,10 @@ while [[ $# -gt 0 ]]; do
       shift
       : ${VEI_VERSION:="${1}"}
       ;;
+    --agent-version ) # (legacy)
+      shift
+      : ${AGENT_VERSION:="${1}"}
+      ;;
     --operator-version ) # (legacy)
       shift
       : ${OPERATOR_VERSION:="${1}"}
