@@ -335,49 +335,6 @@ approve-destructive-operation() {
   fi
 }
 
-create-unsafe-tls-secrets() {
-  local missing_packages=($(get-missing-package-dependencies "kubectl"))
-  if [[ ${#missing_packages[@]} -gt 0 ]]; then
-    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
-    return 1
-  fi
-  rogue_cert_name=kryptonite
-  cat <<EOF > ${temp_dir}/ssl.conf
-  [ req ]
-  default_bits		= 2048
-  distinguished_name	= req_distinguished_name
-  req_extensions		= req_ext
-  
-  [ req_distinguished_name ]
-  commonName          = ${rogue_cert_name}.elements.com
-  
-  [ req_ext ]
-  keyUsage            = digitalSignature, keyEncipherment
-  extendedKeyUsage    = serverAuth
-  subjectAltName      = @alt_names
-  
-  [ alt_names ]
-  DNS.1               = ${rogue_cert_name}.elements.com
-EOF
-  openssl genrsa -out ${temp_dir}/key.pem 2048 # https://gist.github.com/croxton/ebfb5f3ac143cd86542788f972434c96
-  openssl req -new -key ${temp_dir}/key.pem -out ${temp_dir}/csr.pem -subj "/CN=${rogue_cert_name}.elements.com" -reqexts req_ext -config ${temp_dir}/ssl.conf
-  openssl_negative_days=$(uname | grep -q Darwin && echo || echo -) # MacOS openssl doesn't support -ve days (for simulating expired certs)
-  openssl x509 -req -in ${temp_dir}/csr.pem -signkey ${temp_dir}/key.pem -out ${temp_dir}/cert.pem -days ${openssl_negative_days}1 -extensions req_ext -extfile ${temp_dir}/ssl.conf
-  kubectl create namespace demo-certs 2>/dev/null || true
-  kubectl -n demo-certs create secret tls ${rogue_cert_name}-elements-com-tls --cert=${temp_dir}/cert.pem --key=${temp_dir}/key.pem
-}
-
-discover-tls-secrets() {
-  local missing_packages=($(get-missing-package-dependencies "kubectl"))
-  if [[ ${#missing_packages[@]} -gt 0 ]]; then
-    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
-    return 1
-  fi
-  show-cluster-status
-  log-info "The following certificates were discovered:"
-  kubectl get --raw /api/v1/secrets | jq -r '.items[] | select(.type == "kubernetes.io/tls") | "/namespaces/\(.metadata.namespace)/secrets/\(.metadata.name)"'
-}
-
 check-undeployed() {
   if kubectl get namespace ${1} >/dev/null 2>&1; then
     if kubectl -n ${1} rollout status deployment ${2} >/dev/null 2>&1; then
@@ -497,6 +454,98 @@ EOF
   kubectl -n jetstack-secure wait pod -l app=webhook --for=condition=Ready --timeout=300s
 }
 
+discover-tls-secrets() {
+  local missing_packages=($(get-missing-package-dependencies "kubectl"))
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
+    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
+    return 1
+  fi
+  show-cluster-status
+  log-info "The following certificates were discovered:"
+  kubectl get --raw /api/v1/secrets | jq -r '.items[] | select(.type == "kubernetes.io/tls") | "/namespaces/\(.metadata.namespace)/secrets/\(.metadata.name)"'
+}
+
+create-unsafe-tls-secrets() {
+  local missing_packages=($(get-missing-package-dependencies "kubectl"))
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
+    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
+    return 1
+  fi
+  rogue_cert_name=kryptonite
+  cat <<EOF > ${temp_dir}/ssl.conf
+  [ req ]
+  default_bits		= 2048
+  distinguished_name	= req_distinguished_name
+  req_extensions		= req_ext
+  
+  [ req_distinguished_name ]
+  commonName          = ${rogue_cert_name}.elements.com
+  
+  [ req_ext ]
+  keyUsage            = digitalSignature, keyEncipherment
+  extendedKeyUsage    = serverAuth
+  subjectAltName      = @alt_names
+  
+  [ alt_names ]
+  DNS.1               = ${rogue_cert_name}.elements.com
+EOF
+  openssl genrsa -out ${temp_dir}/key.pem 2048 # https://gist.github.com/croxton/ebfb5f3ac143cd86542788f972434c96
+  openssl req -new -key ${temp_dir}/key.pem -out ${temp_dir}/csr.pem -subj "/CN=${rogue_cert_name}.elements.com" -reqexts req_ext -config ${temp_dir}/ssl.conf
+  openssl_negative_days=$(uname | grep -q Darwin && echo || echo -) # MacOS openssl doesn't support -ve days (for simulating expired certs)
+  openssl x509 -req -in ${temp_dir}/csr.pem -signkey ${temp_dir}/key.pem -out ${temp_dir}/cert.pem -days ${openssl_negative_days}1 -extensions req_ext -extfile ${temp_dir}/ssl.conf
+  kubectl create namespace demo-certs 2>/dev/null || true
+  kubectl -n demo-certs create secret tls ${rogue_cert_name}-elements-com-tls --cert=${temp_dir}/cert.pem --key=${temp_dir}/key.pem
+}
+
+create-safe-tls-secrets() {
+  local missing_packages=($(get-missing-package-dependencies "kubectl"))
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
+    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
+    return 1
+  fi
+
+  check-deployed jetstack-secure cert-manager
+  show-cluster-status
+  approve-destructive-operation
+
+  log-info "Creating a self-signed issuer"
+  cat <<EOF > ${temp_dir}/patchfile
+  spec:
+    issuers:
+      - name: self-signed
+        clusterScope: true
+        selfSigned: {}
+EOF
+  kubectl patch installation jetstack-secure --type merge --patch-file ${temp_dir}/patchfile
+  sleep 5 # not sure we can "wait" on anything so just give the issuer a moment to appear
+
+  log-info "Create cert-manager certs"
+  kubectl create namespace demo-certs 2>/dev/null || true
+  local subdomains=("hydrogen" "helium" "lithium" "beryllium" "boron" "carbon" "nitrogen" "oxygen" "fluorine" "neon")
+  local durations=( "8760"     "4320"   "2160"    "720"       "240"   "120"    "96"       "24"     "6"        "1")
+  for i in "${!subdomains[@]}"; do
+    cat << EOF | kubectl -n demo-certs apply -f -
+    apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      name: ${subdomains[i]}.elements.com
+    spec:
+      secretName: ${subdomains[i]}-elements-com-tls
+      dnsNames:
+        - ${subdomains[i]}.elements.com
+      duration: ${durations[i]}h
+      usages:
+      - digital signature
+      - key encipherment
+      - server auth
+      issuerRef:
+        name: self-signed
+        kind: ClusterIssuer
+        group: cert-manager.io
+EOF
+  done
+}
+
 deploy-agent-v2() {
   log-info "Ensuring ${OWNING_TEAM} is available in VCP"
   local url=https://$(get-regional-url)/v1/teams
@@ -600,55 +649,6 @@ EOF
 EOF
 }
 
-create-safe-tls-secrets() {
-  local missing_packages=($(get-missing-package-dependencies "kubectl"))
-  if [[ ${#missing_packages[@]} -gt 0 ]]; then
-    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
-    return 1
-  fi
-
-  check-deployed jetstack-secure cert-manager
-  show-cluster-status
-  approve-destructive-operation
-
-  log-info "Creating a self-signed issuer"
-  cat <<EOF > ${temp_dir}/patchfile
-  spec:
-    issuers:
-      - name: self-signed
-        clusterScope: true
-        selfSigned: {}
-EOF
-  kubectl patch installation jetstack-secure --type merge --patch-file ${temp_dir}/patchfile
-  sleep 5 # not sure we can "wait" on anything so just give the issuer a moment to appear
-
-  log-info "Create cert-manager certs"
-  kubectl create namespace demo-certs 2>/dev/null || true
-  local subdomains=("hydrogen" "helium" "lithium" "beryllium" "boron" "carbon" "nitrogen" "oxygen" "fluorine" "neon")
-  local durations=( "8760"     "4320"   "2160"    "720"       "240"   "120"    "96"       "24"     "6"        "1")
-  for i in "${!subdomains[@]}"; do
-    cat << EOF | kubectl -n demo-certs apply -f -
-    apiVersion: cert-manager.io/v1
-    kind: Certificate
-    metadata:
-      name: ${subdomains[i]}.elements.com
-    spec:
-      secretName: ${subdomains[i]}-elements-com-tls
-      dnsNames:
-        - ${subdomains[i]}.elements.com
-      duration: ${durations[i]}h
-      usages:
-      - digital signature
-      - key encipherment
-      - server auth
-      issuerRef:
-        name: self-signed
-        kind: ClusterIssuer
-        group: cert-manager.io
-EOF
-  done
-}
-
 usage() {
   echo "Helper script for TLS Protect for Kubernetes (v${SCRIPT_VERSION})"
   echo
@@ -666,15 +666,15 @@ usage() {
   echo "  get-oauth-token            Obtains token for TLSPK_SA_USER_ID/TLSPK_SA_USER_SECRET pair"
   echo "  get-dockerconfig           Obtains Docker-compatible registry config / image pull secret (as used with 'helm upgrade --registry-config')"
   echo "  create-local-k8s-cluster   Create a new k8s cluster on localhost (uses k3d)"
-  echo "  discover-tls-secrets       Scan the current cluster for TLS secrets"
   echo "  deploy-agent               Deploys the TLSPK agent component (legacy)"
   echo "  install-operator           Installs the TLSPK operator (legacy)"
   echo "  deploy-operator-components Deploys minimal operator components, incluing cert-manager (legacy)"
+  echo "  discover-tls-secrets       Scan the current cluster for TLS secrets"
+  echo "  create-unsafe-tls-secrets  Define TLS Secrets in the demo-certs namespace (NOT protected by cert-manager)"
+  echo "  create-safe-tls-secrets    Use cert-manager Certificate CRD to define a collection of self-signed certificates in the demo-certs namespace"
   echo "  deploy-agent-v2            Deploys the TLSPK agent component"
   echo "  deploy-components-v2       Installs the TLSPK components"
   echo "  create-issuers-v2          one self-signed, one native Venafi Cloud (VCP_APIKEY required)"
-  echo "  create-unsafe-tls-secrets  Define TLS Secrets in the demo-certs namespace (NOT protected by cert-manager)"
-  echo "  create-safe-tls-secrets    Use cert-manager Certificate CRD to define a collection of self-signed certificates in the demo-certs namespace"
   echo
   echo "Flags:"
   echo "  --auto-approve                 Suppress prompts regarding potentially destructive operations"
@@ -711,15 +711,15 @@ while [[ $# -gt 0 ]]; do
     get-oauth-token | \
     get-dockerconfig | \
     create-local-k8s-cluster | \
-    discover-tls-secrets | \
     deploy-agent | \
     install-operator | \
     deploy-operator-components | \
+    discover-tls-secrets | \
+    create-unsafe-tls-secrets | \
+    create-safe-tls-secrets | \
     deploy-agent-v2 | \
     deploy-components-v2 | \
-    create-issuers-v2 | \
-    create-unsafe-tls-secrets | \
-    create-safe-tls-secrets )
+    create-issuers-v2)
       COMMAND=$1
       ;;
     --auto-approve )
