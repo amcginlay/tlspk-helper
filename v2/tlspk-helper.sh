@@ -14,8 +14,8 @@ VEI_VERSION_DEFAULT="v0.11.0"
 OWNING_TEAM=k8s-cluster-discovery-demo-team
 
 DOMAIN="container-gulch"
-VCP_ZONE_APP=${DOMAIN}
-VCP_ZONE_CIT="Default"                      # pristine VCP tenants always start with a 'Default' CIT (Built-In CA)
+VCP_ZONE_APP=${DOMAIN}-app
+VCP_ZONE_CIT=${DOMAIN}-cit
 
 MISSING_ENV_VAR_MSG="The following REQUIRED environment variables are missing:"
 MISSING_PACKAGE_DEPENDENCIES_MSG="The following REQUIRED package dependencies are missing:"
@@ -601,13 +601,18 @@ deploy-components-v2() {
 
 create-issuers-v2() {
   local vcp_url=$(get-regional-url)
-  # TODO get VEI & Digicert working for container-gulch (if necessary!)
   log-info "Setting minimal policy (Application/CertificateIssuingTemplate pair) in VCP"
   cat <<EOF > ${temp_dir}/policy.json
   {
     "policy": {
       "certificateAuthority": "BUILTIN\\\\Built-In CA\\\\Default Product",
       "keyPair": {
+        "keyTypes": [
+          "RSA"
+        ],
+        "rsaKeySizes": [
+          2048,3072,4096
+        ],
         "serviceGenerated": false
       }
     }
@@ -757,88 +762,53 @@ create-outlaw-two() {
   log-info "${subdomain} dispatched!"
 }
 
-# create-outlaw-three() {
-#   subdomain="cipher-snake" # Certificate with Weak Cipher (2048)
-#   issuer="ven-native-issuer"
-#   days=90
-#   size=2048
-#   kubectl create namespace demo-certs 2>/dev/null || true
-#   cat << EOF | kubectl -n demo-certs apply -f -
-#     apiVersion: cert-manager.io/v1
-#     kind: Certificate
-#     metadata:
-#       name: ${subdomain}.${DOMAIN}.com
-#     spec:
-#       secretName: ${subdomain}-${DOMAIN}-com-tls
-#       commonName: ${subdomain}.${DOMAIN}.com
-#       dnsNames:
-#         - ${subdomain}.${DOMAIN}.com
-#       duration: $(( ${days} * 24 ))h
-#       privateKey:
-#         algorithm: RSA
-#         encoding: PKCS1
-#         size: ${size}
-#       usages:
-#       - digital signature
-#       - key encipherment
-#       - server auth
-#       issuerRef:
-#         name: ${issuer}
-#         kind: ClusterIssuer
-#         group: cert-manager.io
-# EOF
+create-outlaw-three() {
+  subdomain="cipher-snake" # Certificate with Weak Cipher (2048)
+  issuer="ven-native-issuer"
+  days=90
+  size=2048
+  kubectl create namespace demo-certs 2>/dev/null || true
 
-#   # create a pod to mount the secret
-#   kubectl -n demo-certs apply -f <(get-pod-manifest-template ${subdomain} ${subdomain}-${DOMAIN}-com-tls)
+  log-info "creating cert/secret for ${subdomain}"
+  kubectl -n demo-certs apply -f <(get-cert-manifest-template ${subdomain} ${issuer} ${days} ${size})
 
-#   log-info "Cipher Snake dispatched!"
-# }
+  log-info "creating pod to mount the secret for ${subdomain}"
+  kubectl -n demo-certs apply -f <(get-pod-manifest-template ${subdomain} ${subdomain}-${DOMAIN}-com-tls)
 
-# create-outlaw-four() {
-#   subdomain="phantom-ca" # Unapproved Certificate Authorities (non-Venafi - currently self-signed)
-#   issuer="self-signed"
-#   days=90
-#   # size=4096
-#   kubectl create namespace demo-certs 2>/dev/null || true
-#   cat << EOF | kubectl -n demo-certs apply -f -
-#     apiVersion: cert-manager.io/v1
-#     kind: Certificate
-#     metadata:
-#       name: ${subdomain}.${DOMAIN}.com
-#     spec:
-#       secretName: ${subdomain}-${DOMAIN}-com-tls
-#       commonName: ${subdomain}.${DOMAIN}.com
-#       dnsNames:
-#         - ${subdomain}.${DOMAIN}.com
-#       duration: $(( ${days} * 24 ))h
-#       # privateKey:
-#       #   algorithm: RSA
-#       #   encoding: PKCS1
-#       #   size: ${size} # <-- self-signed keys are of limited size (256 by default?)
-#       usages:
-#       - digital signature
-#       - key encipherment
-#       - server auth
-#       issuerRef:
-#         name: ${issuer}
-#         kind: ClusterIssuer
-#         group: cert-manager.io
+  log-info "${subdomain} dispatched!"
+}
 
-#   # create a pod to mount the secret
-#   kubectl -n demo-certs apply -f <(get-pod-manifest-template ${subdomain} ${subdomain}-${DOMAIN}-com-tls)
+create-outlaw-four() {
+  subdomain="phantom-ca" # Unapproved Certificate Authorities (non-Venafi - currently self-signed)
+  issuer="self-signed"
+  days=90
+  size=4096
+  kubectl create namespace demo-certs 2>/dev/null || true
 
-# EOF
-#   log-info "The Phantom CA dispatched!"
-# }
+  log-info "creating cert/secret for ${subdomain}"
+  kubectl -n demo-certs apply -f <(get-cert-manifest-template ${subdomain} ${issuer} ${days} ${size})
 
-# create-outlaw-five() {
-#   subdomain="ghost-rider" # Certificate which is not used in any ingress or pod mount
-#   log-info "Ghost Rider dispatched!"
+  log-info "creating pod to mount the secret for ${subdomain}"
+  kubectl -n demo-certs apply -f <(get-pod-manifest-template ${subdomain} ${subdomain}-${DOMAIN}-com-tls)
 
-#   # DON'T create any associated pod (hence no mountpoint)
-#   kubectl -n demo-certs apply -f <(get-pod-manifest-template ${subdomain} ${subdomain}-${DOMAIN}-com-tls)
+  log-info "${subdomain} dispatched!"
+}
 
-# }
+create-outlaw-five() {
+  subdomain="ghost-rider" # An unused certificate
+  issuer="ven-native-issuer"
+  days=90
+  size=4096
+  kubectl create namespace demo-certs 2>/dev/null || true
+
+  log-info "creating cert/secret for ${subdomain}"
+  kubectl -n demo-certs apply -f <(get-cert-manifest-template ${subdomain} ${issuer} ${days} ${size})
+
+  log-info "intentionally NOT creating pod to mount the secret for ${subdomain}!"
+  # kubectl -n demo-certs apply -f <(get-pod-manifest-template ${subdomain} ${subdomain}-${DOMAIN}-com-tls)
+
+  log-info "${subdomain} dispatched!"
+}
 
 create-tls-secrets-v2() {
   local missing_packages=($(get-missing-package-dependencies "kubectl"))
@@ -852,8 +822,9 @@ create-tls-secrets-v2() {
   fi
   create-outlaw-one
   create-outlaw-two
-  # create-outlaw-three
-  # create-outlaw-four
+  create-outlaw-three
+  create-outlaw-four
+  create-outlaw-five
 }
 
 usage() {
