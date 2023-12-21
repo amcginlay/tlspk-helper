@@ -594,7 +594,7 @@ deploy-components-v2() {
 
   log-info "Installing components using venctl ${VENCTL_VERSION} (cert-manager=${CERT_MANAGER_VERSION} vei=${VEI_VERSION})"
   venctl components kubernetes manifest generate \
-    --cert-manager --cert-manager-version ${CERT_MANAGER_VERSION} \
+    --cert-manager --default-approver --cert-manager-version ${CERT_MANAGER_VERSION} \
     --venafi-enhanced-issuer --venafi-enhanced-issuer-version ${VEI_VERSION} | \
     venctl components kubernetes manifest tool sync -f -
 }
@@ -674,15 +674,43 @@ get-pod-manifest-template() {
 EOF
 }
 
+get-cert-manifest-template() {
+  subdomain=${1}
+  issuer=${2}
+  days=${3}
+  size=${4}
+  cat <<EOF
+    apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      name: ${subdomain}.${DOMAIN}.com
+    spec:
+      secretName: ${subdomain}-${DOMAIN}-com-tls
+      commonName: ${subdomain}.${DOMAIN}.com
+      dnsNames:
+        - ${subdomain}.${DOMAIN}.com
+      duration: $(( ${days} * 24 ))h
+      privateKey:
+        algorithm: RSA
+        encoding: PKCS1
+        size: ${size}
+      usages:
+      - digital signature
+      - key encipherment
+      - server auth
+      issuerRef:
+        name: ${issuer}
+        kind: ClusterIssuer
+        group: cert-manager.io
+EOF
+}
+
 create-outlaw-one() {
-  local missing_packages=($(get-missing-package-dependencies "kubectl"))
-  if [[ ${#missing_packages[@]} -gt 0 ]]; then
-    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
-    return 1
-  fi
   subdomain="lone-outlaw" # Unmanaged Certificates
   days=90
   size=4096
+
+  log-info "creating cert/secret for ${subdomain}"
   cat <<EOF > ${temp_dir}/ssl.conf
   [ req ]
   default_bits		= ${size}
@@ -700,55 +728,34 @@ create-outlaw-one() {
   [ alt_names ]
   DNS.1               = ${subdomain}.${DOMAIN}.com
 EOF
-  openssl genrsa -out ${temp_dir}/key.pem 2048 # https://gist.github.com/croxton/ebfb5f3ac143cd86542788f972434c96
+  openssl genrsa -out ${temp_dir}/key.pem ${size} # https://gist.github.com/croxton/ebfb5f3ac143cd86542788f972434c96
   openssl req -new -key ${temp_dir}/key.pem -out ${temp_dir}/csr.pem -subj "/CN=${subdomain}.${DOMAIN}.com" -reqexts req_ext -config ${temp_dir}/ssl.conf
   openssl x509 -req -in ${temp_dir}/csr.pem -signkey ${temp_dir}/key.pem -out ${temp_dir}/cert.pem -days ${days} -extensions req_ext -extfile ${temp_dir}/ssl.conf
   kubectl create namespace demo-certs 2>/dev/null || true
   kubectl -n demo-certs delete secret     ${subdomain}-${DOMAIN}-com-tls 2>/dev/null || true
   kubectl -n demo-certs create secret tls ${subdomain}-${DOMAIN}-com-tls --cert=${temp_dir}/cert.pem --key=${temp_dir}/key.pem
   
-  # create a pod to mount the secret
+  log-info "creating pod to mount the secret for ${subdomain}"
   kubectl -n demo-certs apply -f <(get-pod-manifest-template ${subdomain} ${subdomain}-${DOMAIN}-com-tls)
 
-  echo "The Lone Outlaw dispatched!"
+  log-info "${subdomain} dispatched!"
 }
 
-# create-outlaw-two() {
-#   subdomain="time-bandit" # Certificate with Long Expiry
-#   issuer="ven-native-issuer"
-#   days=900
-#   size=4096
-#   kubectl create namespace demo-certs 2>/dev/null || true
-#   cat << EOF | kubectl -n demo-certs apply -f -
-#     apiVersion: cert-manager.io/v1
-#     kind: Certificate
-#     metadata:
-#       name: ${subdomain}.${DOMAIN}.com
-#     spec:
-#       secretName: ${subdomain}-${DOMAIN}-com-tls
-#       commonName: ${subdomain}.${DOMAIN}.com
-#       dnsNames:
-#         - ${subdomain}.${DOMAIN}.com
-#       duration: $(( ${days} * 24 ))h
-#       privateKey:
-#         algorithm: RSA
-#         encoding: PKCS1
-#         size: ${size}
-#       usages:
-#       - digital signature
-#       - key encipherment
-#       - server auth
-#       issuerRef:
-#         name: ${issuer}
-#         kind: ClusterIssuer
-#         group: cert-manager.io
-# EOF
+create-outlaw-two() {
+  subdomain="time-bandit" # Certificate with Long Expiry
+  issuer="ven-native-issuer"
+  days=900
+  size=4096
+  kubectl create namespace demo-certs 2>/dev/null || true
 
-#   # create a pod to mount the secret
-#   kubectl -n demo-certs apply -f <(get-pod-manifest-template ${subdomain} ${subdomain}-${DOMAIN}-com-tls)
+  log-info "creating cert/secret for ${subdomain}"
+  kubectl -n demo-certs apply -f <(get-cert-manifest-template ${subdomain} ${issuer} ${days} ${size})
 
-#   log-info "The Time Bandit dispatched!"
-# }
+  log-info "creating pod to mount the secret for ${subdomain}"
+  kubectl -n demo-certs apply -f <(get-pod-manifest-template ${subdomain} ${subdomain}-${DOMAIN}-com-tls)
+
+  log-info "${subdomain} dispatched!"
+}
 
 # create-outlaw-three() {
 #   subdomain="cipher-snake" # Certificate with Weak Cipher (2048)
@@ -834,12 +841,17 @@ EOF
 # }
 
 create-tls-secrets-v2() {
-  if ! kubectl get clusterissuers ven-native-issuer 2>/dev/null >&2; then 
+  local missing_packages=($(get-missing-package-dependencies "kubectl"))
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
+    log-error "${MISSING_PACKAGE_DEPENDENCIES_MSG} ${missing_packages[*]}"
+    return 1
+  fi
+  if ! kubectl get clusterissuers ven-native-issuer self-signed 2>/dev/null >&2; then 
     echo "Unable to run create-tls-secrets-v2, please run create-issuers-v2 first"
     return 1
   fi
   create-outlaw-one
-  # create-outlaw-two
+  create-outlaw-two
   # create-outlaw-three
   # create-outlaw-four
 }
