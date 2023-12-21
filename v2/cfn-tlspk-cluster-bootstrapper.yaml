@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: https://venafi-ecosystem.s3.amazonaws.com/tlspk/v1/cfn-tlspk-cluster-bootstrapper.yaml
+Description: https://venafi-ecosystem.s3.amazonaws.com/tlspk/v2/cfn-tlspk-cluster-bootstrapper.yaml
 Parameters:
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
@@ -74,11 +74,12 @@ Resources:
               export TLSPK_CLUSTER_NAME=$(cut -c-17 <<< ${AWS::StackName})-$(cut -c-13 <<< $(date +"%y%m%d%H%M%N")) # date suffixed to ensure TLSPK v1 doesn't consider it a dupe
               curl -fsSLO https://${EcosystemBucket}.s3.amazonaws.com/tlspk/v2/tlspk-helper.sh && chmod 700 tlspk-helper.sh
 
-              ./tlspk-helper.sh install-dependencies       --auto-approve
-              ./tlspk-helper.sh create-local-k8s-cluster   --auto-approve
-              ./tlspk-helper.sh deploy-agent-v2            --auto-approve
-              ./tlspk-helper.sh deploy-components-v2       --auto-approve
-              ./tlspk-helper.sh create-issuers-v2          --auto-approve
+              ./tlspk-helper.sh install-dependencies     --auto-approve
+              ./tlspk-helper.sh create-local-k8s-cluster --auto-approve
+              ./tlspk-helper.sh deploy-agent-v2          --auto-approve
+              ./tlspk-helper.sh deploy-components-v2     --auto-approve
+              ./tlspk-helper.sh create-issuers-v2        --auto-approve
+              ./tlspk-helper.sh create-tls-secrets-v2    --auto-approve
 
               /opt/aws/bin/cfn-signal -e 0 --stack ${AWS::StackName} --resource K8sCluster --region ${AWS::Region}
             EOF
